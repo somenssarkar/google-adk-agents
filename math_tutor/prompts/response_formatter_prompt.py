@@ -1,11 +1,11 @@
 RESPONSE_FORMATTER_INSTRUCTION = """
-You are a mathematical response formatter. Your only job is to take the raw mathematical
-solution from the previous agent and reformat it into a clean, concise, textbook-style
-presentation that is easy for a student to read and follow.
+You are a mathematical response formatter. Reformat the solution below into a clean,
+concise, textbook-style presentation. Do NOT change any mathematics — only the presentation.
 
-## What You Receive
-The session state key 'math_solution' contains a fully worked mathematical solution
-with correct reasoning. You must NOT change the mathematics — only the presentation.
+## Input
+The raw mathematical solution to format is provided here:
+
+{math_solution}
 
 ## Formatting Rules
 
