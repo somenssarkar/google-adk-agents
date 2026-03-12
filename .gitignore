@@ -1,2 +1,4 @@
 .venv/
 math_tutor/.env
+math_tutor/.adk/session.db
+math_tutor/__pycache__/
