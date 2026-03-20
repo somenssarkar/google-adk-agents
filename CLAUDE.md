@@ -530,7 +530,68 @@ These items are deferred by design, not forgotten:
 
 ---
 
-## 13. Local Development
+## 13. Cost & Platform Considerations
+
+> **Research date:** March 2025. Verify pricing at cloud.google.com/vertex-ai/pricing before
+> making production cost decisions — Gemini pricing changes frequently.
+
+### 13.1 Token Pricing — Gemini 2.5 Flash
+
+Token rates are **identical** between Google AI Studio (API key) and Vertex AI:
+
+| Tier | Input | Output (incl. thinking tokens) | Cached Input |
+|------|-------|-------------------------------|--------------|
+| Standard | $0.30 / 1M tokens | $2.50 / 1M tokens | $0.03 / 1M |
+| Batch | $0.15 / 1M tokens | $1.25 / 1M tokens | — |
+
+There is no cost penalty for switching to Vertex AI at the token level.
+
+### 13.2 Google Search Grounding — Dominant Cost Driver
+
+This is the most important cost line for this platform. The math tutor triggers grounded
+searches frequently (theorem lookups, formula verification).
+
+| Platform | Free quota | Paid rate |
+|----------|-----------|-----------|
+| API key (paid tier) | 1,500 grounded prompts/day | **$35 / 1,000 grounded prompts** |
+| Vertex AI (standard) | 1,500 grounded prompts/day | **$35 / 1,000 grounded prompts** |
+| Vertex AI (Enterprise Grounding) | — | $45 / 1,000 prompts + enterprise data guarantees |
+
+**Scale example:** 1,000 student sessions/day × 2 grounded searches each = 2,000 grounded
+prompts/day → 500 above free tier → ~$17.50/day ($525/month) in grounding alone.
+
+**Implication for TODO #1 (token efficiency):** Reducing grounding calls on the math tutor
+(e.g., cache common formula lookups, instruct the agent to batch searches) has a direct
+and significant cost impact. This should be the first optimization target at scale.
+
+### 13.3 API Key vs Vertex AI — When to Switch
+
+The switch requires **zero agent code changes** — only environment variable changes:
+
+```
+# Dev (now):          GOOGLE_GENAI_USE_VERTEXAI=0, GOOGLE_API_KEY=...
+# Production:         GOOGLE_GENAI_USE_VERTEXAI=1, GOOGLE_CLOUD_PROJECT=..., GOOGLE_CLOUD_LOCATION=...
+```
+
+**Switch trigger: before any real student data touches the system.** Reasons:
+
+| Requirement | API Key | Vertex AI |
+|-------------|---------|-----------|
+| FERPA (student education records) | ❌ Not covered | ✅ Google Cloud FERPA agreement available |
+| COPPA (users under 13) | ❌ No contractual support | ✅ Controls available |
+| Data residency guarantee | ❌ Data can go anywhere | ✅ Region-locked (e.g., `us-central1`) |
+| Audit logs (all API calls) | ❌ None | ✅ Cloud Logging with caller identity |
+| SLA with financial credits | ❌ None | ✅ 99.9% monthly uptime |
+| Secret management on Cloud Run | Manual (Secret Manager wiring) | Automatic (service account identity) |
+| AlloyDB AI integration | Awkward split (needs Vertex IAM anyway) | Native unified IAM |
+
+**Bottom line:** API key is correct for local development (free tier, zero setup friction).
+Vertex AI is required for production — the compliance gap is non-negotiable for a platform
+serving students.
+
+---
+
+## 14. Local Development
 
 ```bash
 # Create and activate virtual environment (Windows PowerShell)
