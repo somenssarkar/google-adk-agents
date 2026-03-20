@@ -1,4 +1,4 @@
 .venv/
-math_tutor/.env
-math_tutor/.adk/session.db
+tutor_platform/.env
+tutor_platform/.adk/session.db
 **/*.pyc

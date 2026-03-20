@@ -6,7 +6,7 @@ A collection of AI agents built with [Google Agent Development Kit (ADK)](https:
 
 ```
 google-adk-agents/
-├── math_tutor/          # Mathematics tutoring agent pipeline
+├── tutor_platform/      # AI tutoring platform — orchestrates subject-tutor agents
 └── .venv/               # Python virtual environment
 ```
 
@@ -14,7 +14,7 @@ google-adk-agents/
 
 | Agent | Description |
 |---|---|
-| [math_tutor](math_tutor/) | Two-stage pipeline that solves math problems with verified computation and formats results in textbook style |
+| [tutor_platform](tutor_platform/) | Multi-subject AI tutoring platform. Root orchestrator routes student questions to specialized subject-tutor agents (currently: Mathematics) and returns clean, textbook-style responses |
 
 ## Prerequisites
 
