@@ -512,30 +512,143 @@ async def test_math_routing():
 
 ---
 
-## 12. TODO — Tracked Future Work
+## 12. Hackathon Submission Context
 
-These items are deferred by design, not forgotten:
+### 12.1 Target Event
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 1 | **Token efficiency measurement** | High | Measure tokens per agent per turn across short, medium, and long sessions. Reintroduce `before_model_callback` history trimming once baseline is established. |
-| 2 | **Cross-session student context/memory** | Medium | Design memory layer (AlloyDB or ADK memory tool) for tracking student progress, weak areas, and past sessions. Do not implement ad-hoc. |
-| 3 | **Generic `subject_solution` state key** | High (before 2nd subject) | Rename `math_solution` → `subject_solution` across math tutor and formatter before adding any second subject agent. |
-| 4 | **Production error handling** | High (before Cloud Run) | Add subagent failure handling in root orchestrator and empty-state handling in formatter. |
-| 5 | **MCP tool integration** | Medium | Connect AlloyDB via MCP for quiz datasets and student data. |
-| 6 | **Hugging Face dataset pipeline** | Medium | Build ingestion scripts and AlloyDB schema for educational datasets. |
-| 7 | **Cloud Run deployment** | Medium | Containerize, set up Vertex AI auth, configure scaling. |
-| 8 | **Test suite** | Medium | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
-| 9 | **thinking_budget + include_contents** | Low (after token measurement) | Disable thinking on formatter (`thinking_budget=0`), set `include_contents="none"` on formatter. Tune math tutor budget based on measured cost vs. quality. Do after TODO #1. |
+**Google Cloud Gen AI Academy — APAC Edition** (hosted on Hack2Skill Vision platform)
+- **Submission track:** Track 2 — AI Agent Integration & External Systems
+- **Also showcasing competencies from:** Track 1 (Agentic AI with ADK) and Track 3 (AI-Ready Databases)
+- **Platform URL:** https://vision.hack2skill.com/event/apac-genaiacademy
+
+### 12.2 Academy Track Alignment
+
+The Gen AI Academy APAC teaches three tracks. This project demonstrates mastery of all three:
+
+| Track | Academy Focus | How This Project Demonstrates It |
+|-------|--------------|----------------------------------|
+| **Track 1: Agentic AI Applications** | Build AI agents from design to deployment using Gemini + ADK | Multi-agent orchestrator with subject-tutor agents, SequentialAgent pipelines, AgentTool wrappers, routing logic |
+| **Track 2: AI Agent Integration & External Systems** (PRIMARY) | Connect AI agents to real-world data and tools using MCP | MCP Toolbox connecting agents to quiz database (AlloyDB/Cloud SQL), external curriculum data |
+| **Track 3: AI-Ready Databases** | Power AI applications with AlloyDB / Cloud SQL | AlloyDB or Cloud SQL for PostgreSQL storing multi-subject quiz datasets with pgvector for semantic similarity search |
+
+### 12.3 Judging Criteria (Weighted)
+
+| Criteria | Weight | What Judges Look For | Our Strategy |
+|----------|--------|---------------------|--------------|
+| **Impactful Vision** | 30% | Problem alignment with APAC communities, real-world applicability | Democratizing STEM education for underserved APAC students who lack access to quality tutors |
+| **Technical Merit** | 30% | GenAI tool integration depth, code quality, scalability | Deep Google Cloud stack: ADK multi-agent + MCP Toolbox + AlloyDB/Cloud SQL + pgvector + Vertex AI |
+| **User Experience** | 20% | Intuitive interface, seamless GenAI integration | Student-facing web UI with chat, quiz mode, multilingual APAC language support |
+| **Innovation & Creativity** | 20% | Uniqueness, disruptive potential, positive social impact | Adaptive difficulty via semantic vector search, multi-subject agent scaling, APAC language support |
+
+### 12.4 Submission Requirements
+
+- Functional prototype built with Google Cloud GenAI tools
+- 3-minute demo video (YouTube/Vimeo, public)
+- Text description: goals, functionalities, technical implementation
+- Instructions for judges to access and test (test account, live URL, sandbox)
+- All materials in English
 
 ---
 
-## 13. Cost & Platform Considerations
+## 13. TODO — Hackathon Roadmap
+
+Organized into phases. Each phase builds on the previous one. Items within a phase
+can be parallelized. Phase 1 is prerequisite for all others.
+
+### Phase 1: Core Platform Expansion (Track 1 — Agentic AI)
+> **Goal:** Transform from single-subject proof-of-concept into a multi-subject platform.
+> **Demonstrates:** ADK multi-agent orchestration, SequentialAgent, AgentTool, routing patterns.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 1.1 | **Generic `subject_solution` state key** | Critical | Rename `math_solution` → `subject_solution` across math tutor, formatter, and prompt templates. **Must complete before adding any new subject agent.** |
+| 1.2 | **Add Physics tutor agent** | Critical | Follow Section 7 extension guide. Uses `google_search` + `code_executor` (same as math). Covers mechanics, thermodynamics, optics, electromagnetism. Output key: `subject_solution`. |
+| 1.3 | **Add Science tutor agent** | High | Covers biology, chemistry, environmental science. Uses `google_search` + `url_context` (no code_executor — non-STEM tool pattern). Demonstrates different tool assignment strategy per agent type. |
+| 1.4 | **Update root agent prompt for multi-subject routing** | Critical | Add Physics and Science to supported subjects list, routing rules, and out-of-scope response in `root_agent_prompt.py`. |
+| 1.5 | **Production error handling** | High | Add subagent failure handling in root orchestrator. Add empty-state / missing `{subject_solution}` fallback in formatter. |
+| 1.6 | **ADK workflow patterns showcase** | Medium | Where appropriate, demonstrate SequentialAgent (already used for math pipeline), ParallelAgent (e.g., fetch quiz + solve simultaneously), and LoopAgent (e.g., iterative hint delivery). These are taught in Track 1 and will impress judges. |
+
+### Phase 2: MCP Integration & Quiz Database (Track 2 + Track 3)
+> **Goal:** Connect agents to a real database via MCP — the core of Track 2, powered by Track 3.
+> **Demonstrates:** MCPToolset, MCP Toolbox for Databases, AlloyDB/Cloud SQL with pgvector.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 2.1 | **AlloyDB / Cloud SQL for PostgreSQL setup** | Critical | Provision AlloyDB (preferred) or Cloud SQL for PostgreSQL (budget fallback) on Google Cloud. Enable pgvector extension. Both are natively supported by MCP Toolbox for Databases. Cloud SQL is significantly cheaper for a demo and has identical pgvector + MCP Toolbox support — use it if AlloyDB cost is prohibitive. |
+| 2.2 | **Quiz database schema** | Critical | Implement the `problems` table (see Section 9 schema). Key columns: `subject`, `difficulty`, `topic_tags` (JSONB), `embedding VECTOR(768)` for pgvector. Index by `(subject, difficulty)` and `ivfflat` for vector cosine similarity. Must support Math, Physics, and Science questions. |
+| 2.3 | **Quiz dataset ingestion pipeline** | Critical | Ingest `gsm8k` and/or `lighteval/MATH` from Hugging Face for Math. Source or generate Physics and Science question sets. Normalize schema. Generate embeddings using Vertex AI Embeddings API (`text-embedding-005`). Scripts go in `scripts/data_pipeline/`. |
+| 2.4 | **MCP Toolbox for Databases setup** | Critical | Use Google's [MCP Toolbox for Databases](https://github.com/googleapis/genai-toolbox) to expose quiz data as MCP tools. Configure `tools.yaml` with query tools: `get_quiz_question(subject, difficulty)`, `get_questions_by_topic(subject, topic)`, `get_similar_question(embedding, difficulty)`. Toolbox connects to AlloyDB/Cloud SQL instance. |
+| 2.5 | **Connect quiz MCP tools to subject agents** | Critical | Use `MCPToolset` from ADK to connect each subject-tutor agent to the MCP toolbox. Agents can now pull quiz questions contextually (e.g., "quiz me on algebra" triggers a database lookup via MCP for an appropriate question). |
+| 2.6 | **"Quiz Me" mode in root orchestrator** | High | Root agent detects quiz requests (e.g., "test me on calculus") and routes to the appropriate subject agent with quiz context. Agent fetches a question via MCP, presents it, evaluates the student's answer, and provides step-by-step feedback. |
+| 2.7 | **Semantic similarity for adaptive difficulty** | High | When a student struggles, use pgvector cosine similarity to find semantically related problems at an easier difficulty level. This is the key innovation differentiator — adaptive learning powered by vector search on AlloyDB/Cloud SQL. |
+
+### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
+> **Goal:** Replace `adk web` with a polished student interface.
+> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability.
+> **Can start in parallel with Phase 2** (mock data initially, connect to real agents later).
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 3.1 | **Student web UI** | Critical | Build with Streamlit or Gradio (fastest for hackathon). Features: chat interface, subject selector, formatted math/science output (Unicode, structured steps). Must render the formatter's output beautifully. |
+| 3.2 | **Student profile & onboarding** | High | Simple profile: name, grade level, preferred language, subjects of interest. Stored in session state for the demo. Used by agents to calibrate difficulty and language. |
+| 3.3 | **Quiz mode UI** | High | Dedicated quiz interface: question display, answer input, instant feedback, score tracking. Visual progress indicator (e.g., 3/10 questions completed). |
+| 3.4 | **Multilingual APAC language support** | High | Gemini natively supports Hindi, Bahasa Indonesia, Thai, Vietnamese, Tagalog, Chinese, Japanese, Korean, etc. Add language detection on student input and instruct agents to respond in the student's preferred language. Low effort, very high APAC relevance for judges. |
+| 3.5 | **Session progress display** | Medium | Show topics covered and quiz scores within the current session. In-memory only (no persistent DB needed for demo). Visual summary at end of session. |
+
+### Phase 4: Cloud Deployment & Polish (Technical Merit)
+> **Goal:** Deploy on Google Cloud to provide judges a live URL.
+> **Demonstrates:** Production readiness, Vertex AI integration, Cloud Run scalability.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 4.1 | **Switch to Vertex AI** | High | Set `GOOGLE_GENAI_USE_VERTEXAI=1`. Configure project, region. Zero code changes needed — only env vars. Shows production-grade auth and compliance awareness. |
+| 4.2 | **Cloud Run deployment** | High | Containerize with Dockerfile. Deploy agent backend to Cloud Run. Configure `--timeout 300`, `--concurrency 1`, min instances 1. Provide judges a live URL. |
+| 4.3 | **Observability** | Low | Integrate Cloud Logging and Cloud Trace. Nice-to-have for demo, shows production thinking. |
+
+### Phase 5: Demo & Submission Preparation
+> **Goal:** Create compelling submission materials.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| 5.1 | **APAC impact narrative** | Critical | Write project description framing the platform as solving STEM education access inequality across APAC — 250M+ students in the region lack access to quality tutors. Cite specific stats for India, Indonesia, Philippines. |
+| 5.2 | **3-minute demo video** | Critical | Structure: Problem (30s) → Solution vision (30s) → Live demo of multi-subject tutoring + quiz mode + multilingual (90s) → Architecture & Google Cloud stack (30s) → Impact & roadmap (30s). Upload to YouTube, public. |
+| 5.3 | **Judge access instructions** | Critical | Provide: live Cloud Run URL (or local setup guide), test student account, sample queries per subject, quiz mode walkthrough. |
+| 5.4 | **Architecture diagram** | High | Visual showing: Root Agent → Subject Agents → MCP Toolbox → AlloyDB/Cloud SQL (pgvector) → Student UI. Highlight all Google Cloud components. |
+| 5.5 | **README overhaul** | High | Rewrite README.md as the public-facing project showcase: problem statement, APAC relevance, architecture diagram, tech stack, setup instructions, screenshots/GIFs. |
+
+### Deferred (Post-Hackathon)
+> These items are valuable but not required for a winning demo submission.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| D.1 | **Cross-session student progress persistence** | Post-hackathon | Design persistent student progress tracking in AlloyDB (topics, scores, weak areas). Requires auth system and student identity. Not needed for demo — session state is sufficient. |
+| D.2 | **Token efficiency & thinking_budget** | Post-hackathon | Disable thinking on formatter (`thinking_budget=0`), set `include_contents="none"`. Tune per-agent budgets based on measured cost vs. quality. |
+| D.3 | **Token measurement baseline** | Post-hackathon | Measure tokens per agent per turn. Reintroduce `before_model_callback` history trimming if needed. |
+| D.4 | **Test suite** | Post-hackathon | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
+| D.5 | **Enterprise web search** | Post-hackathon | Replace `google_search` with `enterprise_web_search` on Vertex AI for FERPA/COPPA compliance in production. |
+
+### Phase Summary — Execution Order
+
+```
+Phase 1 (Core Expansion)        ←── START HERE, prerequisite for all
+    ↓
+Phase 2 (MCP + Database)        ←── Primary track (Track 2 + 3), highest differentiation
+    ↓                                 ↕ (can overlap)
+Phase 3 (Student UI)             ←── Start in parallel with Phase 2
+    ↓
+Phase 4 (Cloud Deployment)       ←── After core features work locally
+    ↓
+Phase 5 (Demo & Submission)      ←── Final, after everything works
+```
+
+---
+
+## 14. Cost & Platform Considerations
 
 > **Research date:** March 2025. Verify pricing at cloud.google.com/vertex-ai/pricing before
 > making production cost decisions — Gemini pricing changes frequently.
 
-### 13.1 Token Pricing — Gemini 2.5 Flash
+### 14.1 Token Pricing — Gemini 2.5 Flash
 
 Token rates are **identical** between Google AI Studio (API key) and Vertex AI:
 
@@ -546,7 +659,7 @@ Token rates are **identical** between Google AI Studio (API key) and Vertex AI:
 
 There is no cost penalty for switching to Vertex AI at the token level.
 
-### 13.2 Google Search Grounding — Dominant Cost Driver
+### 14.2 Google Search Grounding — Dominant Cost Driver
 
 This is the most important cost line for this platform. The math tutor triggers grounded
 searches frequently (theorem lookups, formula verification).
@@ -564,7 +677,7 @@ prompts/day → 500 above free tier → ~$17.50/day ($525/month) in grounding al
 (e.g., cache common formula lookups, instruct the agent to batch searches) has a direct
 and significant cost impact. This should be the first optimization target at scale.
 
-### 13.3 API Key vs Vertex AI — When to Switch
+### 14.3 API Key vs Vertex AI — When to Switch
 
 The switch requires **zero agent code changes** — only environment variable changes:
 
@@ -591,7 +704,7 @@ serving students.
 
 ---
 
-## 14. Local Development
+## 15. Local Development
 
 ```bash
 # Create and activate virtual environment (Windows PowerShell)
