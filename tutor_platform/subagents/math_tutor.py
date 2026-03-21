@@ -18,8 +18,10 @@ from ..prompts.math_tutor_prompt import MATH_TUTOR_INSTRUCTION
 # url_context is available in tutor_platform/tools/__init__.py for subject agents
 # that do not use code_executor (e.g., Geography, English).
 #
-# Stores the raw verified solution in session state under 'math_solution'
-# for the Response Formatter to present to the student.
+# Writes the verified solution to session state under 'subject_solution'.
+# The Response Formatter reads this via {subject_solution} template injection.
+# The formatter uses include_contents='none' so it ONLY sees its instruction
+# (with the substituted solution) — no conversation history that could cause confusion.
 math_tutor_agent = Agent(
     model='gemini-2.5-flash',
     name='math_tutor_agent',
@@ -34,5 +36,5 @@ math_tutor_agent = Agent(
     instruction=MATH_TUTOR_INSTRUCTION,
     tools=[google_search],
     code_executor=code_executor,
-    output_key='math_solution',
+    output_key='subject_solution',
 )

@@ -93,22 +93,44 @@ Student query
     │
     ▼
 root_tutor_agent
-    │  calls
+    │  calls (AgentTool)
     ▼
-math_tutor_agent ──── output_key='math_solution' ──► session state['math_solution']
-    │                                                         │
-    │  root agent calls formatter                             │ injected as {math_solution}
-    ▼                                                         │
-response_formatter ◄──────────────────────────────────────────┘
-    │  output_key='formatted_response'
+[subject]_pipeline (SequentialAgent)
+    │
+    ├─► [subject]_tutor_agent ── output_key='subject_solution' ──► session state['subject_solution']
+    │                                                                          │
+    │   (SequentialAgent runs next)                                            │ injected as
+    │                                                                          │ {subject_solution}
+    ├─► before_agent_callback (_validate_solution) ◄───────────────────────────┤
+    │       checks session state['subject_solution'] is non-empty             │
+    │       returns graceful fallback if missing; proceeds if present          │
+    │                                                                          │
+    ▼                                                                          │
+    response_formatter_[subject]  ◄────────────────────────────────────────────┘
+    │   include_contents='none'  ← sees ONLY its instruction + {subject_solution}
+    │   output_key='formatted_response'
     ▼
-session state['formatted_response'] → displayed to student
+session state['formatted_response'] → AgentTool returns output → root agent relays verbatim
 ```
 
 **Key mechanics:**
-- `output_key='math_solution'` on `math_tutor_agent` writes its response to session state.
-- ADK injects `{math_solution}` into `response_formatter`'s instruction template at call time.
-- `output_key='formatted_response'` on `response_formatter` writes the final clean output.
+- `output_key='subject_solution'` on each tutor writes the verified solution to session state.
+- ADK injects `{subject_solution}` into the formatter's instruction at the time the formatter
+  makes its LLM call (after the tutor has run and written to session state).
+- `include_contents='none'` on the formatter is the critical fix: the formatter receives
+  ONLY its instruction (with `{subject_solution}` substituted). No conversation history.
+  This prevents a long multi-turn history from confusing the formatter into formatting a
+  response from an earlier turn instead of the current solution.
+- `before_agent_callback` validates that `subject_solution` is non-empty before the LLM
+  call. If the tutor failed silently, a graceful fallback is returned immediately.
+- This design is also token-efficient: the formatter never pays for prior conversation turns.
+
+**Root cause of the cross-subject bug (fixed by `include_contents='none'`):**
+After 5-6 turns, the formatter's LLM call accumulated a long conversation history of prior
+subject answers. Even though `{subject_solution}` in the instruction correctly contained the
+new solution, the LLM's attention drifted to the dominant prior-turn content in the history
+(e.g., physics answers) and formatted that instead of the current solution. Removing the
+history entirely via `include_contents='none'` eliminates this confusion.
 
 ### 3.5 Out-of-Scope Query Handling
 
@@ -137,17 +159,20 @@ The `name=` field is used by ADK for routing and logs. Use `snake_case`.
 |-------|---------|
 | Root orchestrator | `root_tutor_agent` |
 | Math tutor | `math_tutor_agent` |
-| Response formatter | `response_formatter` |
-| Future: Physics | `physics_tutor_agent` |
+| Physics tutor | `physics_tutor_agent` |
+| Science tutor | `science_tutor_agent` |
+| Response formatter | `response_formatter_{pipeline_name}` (one instance per pipeline — see Section 6) |
+| Future: Geography | `geography_tutor_agent` |
 
 ### 4.3 output_key Conventions
 
-- Subject-tutor agents: `output_key='<subject>_solution'` (e.g., `math_solution`, `physics_solution`)
+- All subject-tutor agents: `output_key='subject_solution'` (single generic key shared across all subjects)
 - Response formatter: `output_key='formatted_response'` (always generic)
 
-> **Future note:** When multiple subject agents exist, standardize to a single
-> `subject_solution` key so the formatter instruction template doesn't need per-subject variants.
-> Track this as a refactor task before adding the second subject agent.
+> **Why a single `subject_solution` key:** Only one pipeline runs per student turn.
+> Using the same key for all subjects means the formatter instruction template never
+> needs per-subject variants. The formatter's `include_contents='none'` ensures it
+> always reads the current turn's solution, not a stale value from a prior turn.
 
 ### 4.4 Imports
 
@@ -180,10 +205,13 @@ and document the reason in a comment.
    the root LLM to decide which agent to call. Write descriptions from the perspective of
    *when to call this agent*, not just what it does.
 
-5. **No callbacks for now.** The `_trim_history_for_formatter` callback was removed to baseline
-   token behavior during development. Callbacks will be reintroduced after measuring token
-   consumption across conversation lengths. Do not add `before_model_callback` or
-   `after_model_callback` without a documented reason and measurement plan.
+5. **Callbacks require a documented reason.** Do not add `before_agent_callback`,
+   `after_agent_callback`, `before_model_callback`, or `after_model_callback` without
+   a clear, documented purpose. Current callbacks in use:
+   - `_validate_solution` on `response_formatter_*`: short-circuits the LLM call if
+     `subject_solution` is empty, returning a graceful fallback without wasting tokens.
+   Any future callbacks must follow the same pattern — document the reason in both the
+   function docstring and a comment at the call site.
 
 6. **No context/memory yet.** Cross-session student context (e.g., remembering a student's
    weak areas) is a planned future feature. Do not add memory tooling until the architecture
@@ -221,13 +249,18 @@ and document the reason in a comment.
 
 | Agent | `google_search` | `url_context` | `code_executor` | Why |
 |-------|:-----------:|:----------:|:-----------:|-----|
-| `math_tutor_agent` | ✓ | — | ✓ | Needs search + verified computation; url_context deferred (see note below) |
-| `response_formatter` | — | — | — | Pure text transformation — no lookups needed, ever |
-| `root_tutor_agent` | — | — | — | Routes only — no subject reasoning performed |
-| Future STEM agents (Physics) | ✓ | — | ✓ | Same pattern as math |
-| Future non-STEM agents (Geography, English) | ✓ | ✓ | — | No code_executor; url_context adds full-page reading |
+| `math_tutor_agent` | ✓ | — | ✓ | Search + verified computation. `bypass_multi_tools_limit=True` keeps both as native built-ins |
+| `physics_tutor_agent` | ✓ | — | ✓ | Same pattern as math — verified numerical physics calculations |
+| `science_tutor_agent` | ✓ | — | — | Google Search grounding is sufficient; url_context cannot be combined (see constraint below) |
+| `response_formatter_*` | — | — | — | Pure text transformation — no lookups ever |
+| `root_tutor_agent` | — | — | — | Routes only — no subject reasoning |
+| Future: Geography, English | ✓ | — | — | url_context unusable alongside google_search; google_search alone is sufficient |
 
-> **Gemini API constraint and fix:** `code_execution` (built-in) and function-calling tools cannot be combined in the same request. ADK's `canonical_tools()` assembles the final tool list including the code_executor's `code_execution` entry. When it sees `len(tools) > 1`, it wraps `google_search` in a `GoogleSearchAgentTool` (a function call), causing a 400 conflict. **Fix:** instantiate `GoogleSearchTool(bypass_multi_tools_limit=True)` — this prevents ADK from ever wrapping `google_search` into a function-call agent tool, keeping it as a native Gemini built-in. Two native built-ins (`google_search` + `code_execution`) are fully compatible. This is already applied in `tutor_platform/tools/__init__.py`.
+> **Gemini API constraints — confirmed through testing:**
+>
+> **Constraint 1 — `code_execution` + function calling:** `code_execution` (built-in) and function-calling tools cannot be combined. Fix: `GoogleSearchTool(bypass_multi_tools_limit=True)` keeps `google_search` as a native Gemini built-in rather than a function-call wrapper. Two native built-ins (`google_search` + `code_execution`) are fully compatible.
+>
+> **Constraint 2 — `url_context` + any other tool:** `url_context` (native built-in) cannot be combined with `google_search` or any other tool in the same request. Error: `"Built-in tools ({url_context}) and Function Calling cannot be combined."` This means `url_context` is only usable as the sole tool on an agent. Currently no active agent uses it — `google_search` grounding is sufficient for all subject tutors.
 
 ### 6.2 Shared Tools Module
 
@@ -298,18 +331,30 @@ physics_tutor_agent = Agent(
     name='physics_tutor_agent',
     description="Expert physics tutor. Call for any physics question. ...",
     instruction=PHYSICS_TUTOR_INSTRUCTION,
-    output_key='physics_solution',   # NOTE: see Step 4
+    output_key='subject_solution',
 )
 ```
 
 **Step 3 — Register with the root orchestrator**
-In `tutor_platform/agent.py`, add the new agent to `sub_agents`:
+In `tutor_platform/agent.py`, create a new pipeline and register it.
+
+> **Important — one-parent rule:** ADK enforces that each Agent instance can only belong
+> to one parent SequentialAgent. Always use `make_response_formatter('<subject>')` to
+> get a fresh formatter instance per pipeline — never share the same instance.
+
 ```python
 from .subagents.physics_tutor import physics_tutor_agent
+from .subagents.response_formatter import make_response_formatter
+
+physics_pipeline = SequentialAgent(
+    name='physics_pipeline',
+    description="...",
+    sub_agents=[physics_tutor_agent, make_response_formatter('physics')],
+)
 
 root_agent = Agent(
     ...
-    sub_agents=[math_tutor_agent, physics_tutor_agent, response_formatter_agent],
+    tools=[AgentTool(agent=math_pipeline), AgentTool(agent=physics_pipeline)],
 )
 ```
 
@@ -555,18 +600,19 @@ The Gen AI Academy APAC teaches three tracks. This project demonstrates mastery 
 Organized into phases. Each phase builds on the previous one. Items within a phase
 can be parallelized. Phase 1 is prerequisite for all others.
 
-### Phase 1: Core Platform Expansion (Track 1 — Agentic AI)
+### Phase 1: Core Platform Expansion (Track 1 — Agentic AI) — ✅ COMPLETE
 > **Goal:** Transform from single-subject proof-of-concept into a multi-subject platform.
 > **Demonstrates:** ADK multi-agent orchestration, SequentialAgent, AgentTool, routing patterns.
+> **Status:** All critical items done. Two items partially complete — remaining work deferred to Phase 2 where it fits naturally.
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 1.1 | **Generic `subject_solution` state key** | Critical | Rename `math_solution` → `subject_solution` across math tutor, formatter, and prompt templates. **Must complete before adding any new subject agent.** |
-| 1.2 | **Add Physics tutor agent** | Critical | Follow Section 7 extension guide. Uses `google_search` + `code_executor` (same as math). Covers mechanics, thermodynamics, optics, electromagnetism. Output key: `subject_solution`. |
-| 1.3 | **Add Science tutor agent** | High | Covers biology, chemistry, environmental science. Uses `google_search` + `url_context` (no code_executor — non-STEM tool pattern). Demonstrates different tool assignment strategy per agent type. |
-| 1.4 | **Update root agent prompt for multi-subject routing** | Critical | Add Physics and Science to supported subjects list, routing rules, and out-of-scope response in `root_agent_prompt.py`. |
-| 1.5 | **Production error handling** | High | Add subagent failure handling in root orchestrator. Add empty-state / missing `{subject_solution}` fallback in formatter. |
-| 1.6 | **ADK workflow patterns showcase** | Medium | Where appropriate, demonstrate SequentialAgent (already used for math pipeline), ParallelAgent (e.g., fetch quiz + solve simultaneously), and LoopAgent (e.g., iterative hint delivery). These are taught in Track 1 and will impress judges. |
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 1.1 | **Generic `subject_solution` state key** | ✅ Done | Renamed `math_solution` → `subject_solution` across math tutor, formatter, and prompt template. All three subject tutors write to `subject_solution`; formatter reads via `{subject_solution}`. |
+| 1.2 | **Add Physics tutor agent** | ✅ Done | `physics_tutor.py` + `physics_tutor_prompt.py` added. Uses `google_search` + `code_executor` (same tool pattern as math). Covers mechanics, thermodynamics, optics, electromagnetism. Output key: `subject_solution`. |
+| 1.3 | **Add Science tutor agent** | ✅ Done | `science_tutor.py` + `science_tutor_prompt.py` added. Covers biology, chemistry, environmental science. Uses `google_search` only — `url_context` removed due to Gemini API 400 conflict (url_context cannot be combined with any other tool). |
+| 1.4 | **Update root agent prompt for multi-subject routing** | ✅ Done | `root_agent_prompt.py` updated with all three subjects, routing disambiguation rules for cross-subject questions, Step 3 error recovery instructions, and constraint to never expose pipeline names. |
+| 1.5 | **Production error handling** | ⚠️ Partial | Formatter: `before_agent_callback` short-circuits LLM if `subject_solution` is empty — returns graceful fallback immediately. `include_contents='none'` eliminates history drift. Root orchestrator: prompt-level error recovery instructions added; code-level subagent failure catching deferred to Phase 4 (pre-Cloud Run). Sufficient for demo. |
+| 1.6 | **ADK workflow patterns showcase** | ⚠️ Partial | SequentialAgent deployed across all three subject pipelines (math, physics, science). ParallelAgent and LoopAgent deferred — they fit more naturally in Phase 2 (parallel quiz fetch + solve; iterative hint loop). See Phase 2 items 2.8 and 2.9. |
 
 ### Phase 2: MCP Integration & Quiz Database (Track 2 + Track 3)
 > **Goal:** Connect agents to a real database via MCP — the core of Track 2, powered by Track 3.
@@ -581,6 +627,8 @@ can be parallelized. Phase 1 is prerequisite for all others.
 | 2.5 | **Connect quiz MCP tools to subject agents** | Critical | Use `MCPToolset` from ADK to connect each subject-tutor agent to the MCP toolbox. Agents can now pull quiz questions contextually (e.g., "quiz me on algebra" triggers a database lookup via MCP for an appropriate question). |
 | 2.6 | **"Quiz Me" mode in root orchestrator** | High | Root agent detects quiz requests (e.g., "test me on calculus") and routes to the appropriate subject agent with quiz context. Agent fetches a question via MCP, presents it, evaluates the student's answer, and provides step-by-step feedback. |
 | 2.7 | **Semantic similarity for adaptive difficulty** | High | When a student struggles, use pgvector cosine similarity to find semantically related problems at an easier difficulty level. This is the key innovation differentiator — adaptive learning powered by vector search on AlloyDB/Cloud SQL. |
+| 2.8 | **ParallelAgent — fetch quiz + solve simultaneously** | Medium | Use ADK `ParallelAgent` to run a quiz question fetch (via MCP) in parallel with any pre-computation or context loading. Demonstrates Track 1 multi-agent patterns; pairs naturally with quiz mode (2.6). |
+| 2.9 | **LoopAgent — iterative hint delivery** | Medium | Use ADK `LoopAgent` to implement a hint loop: student attempts a problem → agent checks answer → if wrong, provides a hint and loops back → exit when correct or max hints reached. Demonstrates Track 1 patterns and improves pedagogical effectiveness. |
 
 ### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
 > **Goal:** Replace `adk web` with a polished student interface.
@@ -622,8 +670,8 @@ can be parallelized. Phase 1 is prerequisite for all others.
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
 | D.1 | **Cross-session student progress persistence** | Post-hackathon | Design persistent student progress tracking in AlloyDB (topics, scores, weak areas). Requires auth system and student identity. Not needed for demo — session state is sufficient. |
-| D.2 | **Token efficiency & thinking_budget** | Post-hackathon | Disable thinking on formatter (`thinking_budget=0`), set `include_contents="none"`. Tune per-agent budgets based on measured cost vs. quality. |
-| D.3 | **Token measurement baseline** | Post-hackathon | Measure tokens per agent per turn. Reintroduce `before_model_callback` history trimming if needed. |
+| D.2 | **Token efficiency & thinking_budget** | Post-hackathon | `include_contents='none'` is already set on the formatter (done in Phase 1). Remaining: disable thinking on formatter (`thinking_budget=0`), tune per-agent budgets based on measured cost vs. quality. |
+| D.3 | **Token measurement baseline** | Post-hackathon | Measure tokens per agent per turn across short, medium, and long sessions. Reintroduce `before_model_callback` history trimming on subject tutors if needed after measurement. |
 | D.4 | **Test suite** | Post-hackathon | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
 | D.5 | **Enterprise web search** | Post-hackathon | Replace `google_search` with `enterprise_web_search` on Vertex AI for FERPA/COPPA compliance in production. |
 

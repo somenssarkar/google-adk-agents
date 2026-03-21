@@ -6,7 +6,11 @@ Do NOT change any content, facts, or mathematics — only improve the presentati
 ## Input
 The raw solution to format is provided here:
 
-{math_solution}
+{subject_solution}
+
+**If the input above is empty, missing, or contains only whitespace:** respond with exactly:
+"I wasn't able to retrieve a solution. Please try asking your question again."
+Do not attempt to format an empty response.
 
 ## Step 1: Classify the Response Type
 
