@@ -23,9 +23,16 @@ and returns clean, textbook-style formatted responses.
 | Agent Framework | Google ADK (`google-adk`) |
 | LLM | `gemini-2.5-flash` (default for all agents) |
 | Code Execution | `BuiltInCodeExecutor` (sandboxed Python) |
-| Web Search | `GoogleSearchTool` |
+| Web Search | `GoogleSearchTool` (Gemini-native grounding) |
+| Database | AlloyDB (pgvector + ScaNN + AlloyDB AI) |
+| Database Protocol | MCP via MCP Toolbox for Databases |
+| Frontend Protocol | AG-UI via CopilotKit + `ag-ui-adk` |
+| Frontend | React/Next.js + CopilotKit (primary) or Streamlit (fallback) |
+| Embeddings | Vertex AI `text-embedding-005` (768 dims) |
+| Backend API | FastAPI (`get_fast_api_app()` + `DatabaseSessionService`) |
 | Runtime | Python 3.12+ |
-| Dev runner | `adk web` (local), Cloud Run (production) |
+| Dev runner | `adk web` (local dev), Cloud Run (production) |
+| Deployment | Google Cloud Run (3 services) + AlloyDB |
 
 ---
 
@@ -63,17 +70,36 @@ google-adk-agents/
 
 ```
 root_tutor_agent  (LlmAgent — Orchestrator)
-├── math_tutor_agent    (LlmAgent — Subject Tutor)
-└── response_formatter  (LlmAgent — Shared Formatter)
+├── math_pipeline       (SequentialAgent)
+│   ├── math_tutor_agent        (LlmAgent — google_search + code_executor)
+│   └── response_formatter_math (LlmAgent — include_contents='none')
+├── physics_pipeline    (SequentialAgent)
+│   ├── physics_tutor_agent     (LlmAgent — google_search + code_executor)
+│   └── response_formatter_physics
+├── science_pipeline    (SequentialAgent)
+│   ├── science_tutor_agent     (LlmAgent — google_search)
+│   └── response_formatter_science
+└── quiz_pipeline       (SequentialAgent — Phase 2)
+    ├── quiz_agent              (LlmAgent — MCPToolset only)
+    └── response_formatter_quiz
+                                    │
+                                    ▼ MCP (HTTP)
+                               Toolbox Server (tools.yaml)
+                                    │
+                                    ▼ AlloyDB connector
+                               AlloyDB (pgvector + ScaNN + AlloyDB AI)
 ```
 
 ### 3.2 Agent Roles
 
 | Agent | Type | Role |
 |-------|------|------|
-| `root_tutor_agent` | `LlmAgent` | Understands query → routes to subject agent → triggers formatter |
+| `root_tutor_agent` | `LlmAgent` | Understands query → routes to subject/quiz pipeline → relays formatted response |
 | `math_tutor_agent` | `LlmAgent` | Solves math with code execution and search; zero hallucination |
-| `response_formatter` | `LlmAgent` | Reformats raw solution into clean textbook-style output |
+| `physics_tutor_agent` | `LlmAgent` | Solves physics with code execution and search; unit-consistent |
+| `science_tutor_agent` | `LlmAgent` | Explains biology, chemistry, environmental science with search grounding |
+| `quiz_agent` (Phase 2) | `LlmAgent` | Fetches quiz questions via MCP, evaluates answers, provides adaptive difficulty |
+| `response_formatter_*` | `LlmAgent` | Reformats raw solution into clean textbook-style output (one instance per pipeline) |
 
 ### 3.3 Orchestration Pattern
 
@@ -162,6 +188,7 @@ The `name=` field is used by ADK for routing and logs. Use `snake_case`.
 | Physics tutor | `physics_tutor_agent` |
 | Science tutor | `science_tutor_agent` |
 | Response formatter | `response_formatter_{pipeline_name}` (one instance per pipeline — see Section 6) |
+| Quiz agent (Phase 2) | `quiz_agent` |
 | Future: Geography | `geography_tutor_agent` |
 
 ### 4.3 output_key Conventions
@@ -247,20 +274,23 @@ and document the reason in a comment.
 
 ### 6.1 Tool Assignment by Agent
 
-| Agent | `google_search` | `url_context` | `code_executor` | Why |
-|-------|:-----------:|:----------:|:-----------:|-----|
-| `math_tutor_agent` | ✓ | — | ✓ | Search + verified computation. `bypass_multi_tools_limit=True` keeps both as native built-ins |
-| `physics_tutor_agent` | ✓ | — | ✓ | Same pattern as math — verified numerical physics calculations |
-| `science_tutor_agent` | ✓ | — | — | Google Search grounding is sufficient; url_context cannot be combined (see constraint below) |
-| `response_formatter_*` | — | — | — | Pure text transformation — no lookups ever |
-| `root_tutor_agent` | — | — | — | Routes only — no subject reasoning |
-| Future: Geography, English | ✓ | — | — | url_context unusable alongside google_search; google_search alone is sufficient |
+| Agent | `google_search` | `url_context` | `code_executor` | `MCPToolset` | Why |
+|-------|:-----------:|:----------:|:-----------:|:-----------:|-----|
+| `math_tutor_agent` | ✓ | — | ✓ | — | Search + verified computation. `bypass_multi_tools_limit=True` keeps both as native built-ins |
+| `physics_tutor_agent` | ✓ | — | ✓ | — | Same pattern as math — verified numerical physics calculations |
+| `science_tutor_agent` | ✓ | — | — | — | Google Search grounding is sufficient; url_context cannot be combined (see constraint below) |
+| `quiz_agent` (Phase 2) | — | — | — | ✓ | MCP tools only — `code_executor` cannot combine with function-calling tools (Constraint 1). Dedicated agent avoids conflict |
+| `response_formatter_*` | — | — | — | — | Pure text transformation — no lookups ever |
+| `root_tutor_agent` | — | — | — | — | Routes only — no subject reasoning |
+| Future: Geography, English | ✓ | — | — | — | url_context unusable alongside google_search; google_search alone is sufficient |
 
 > **Gemini API constraints — confirmed through testing:**
 >
 > **Constraint 1 — `code_execution` + function calling:** `code_execution` (built-in) and function-calling tools cannot be combined. Fix: `GoogleSearchTool(bypass_multi_tools_limit=True)` keeps `google_search` as a native Gemini built-in rather than a function-call wrapper. Two native built-ins (`google_search` + `code_execution`) are fully compatible.
 >
 > **Constraint 2 — `url_context` + any other tool:** `url_context` (native built-in) cannot be combined with `google_search` or any other tool in the same request. Error: `"Built-in tools ({url_context}) and Function Calling cannot be combined."` This means `url_context` is only usable as the sole tool on an agent. Currently no active agent uses it — `google_search` grounding is sufficient for all subject tutors.
+>
+> **Constraint 3 — `code_execution` + MCP tools (Phase 2):** MCP tools are exposed to Gemini as function-calling tools. Per Constraint 1, they cannot coexist with `code_execution` on the same agent. This is why `quiz_agent` is a dedicated agent with MCPToolset only — it cannot be merged into `math_tutor_agent` or `physics_tutor_agent`. The root orchestrator routes quiz requests to `quiz_pipeline` separately from subject tutoring requests.
 
 ### 6.2 Shared Tools Module
 
@@ -376,39 +406,76 @@ In `root_agent_prompt.py`, add Physics to the supported subjects list and routin
 
 ---
 
-## 8. MCP Integration (Forward-Looking)
+## 8. Protocol Integration (MCP + AG-UI)
 
-> **Status:** Planned. Not yet implemented.
+> **Status:** Planned for Phase 2 (MCP) and Phase 3 (AG-UI). Not yet implemented.
 
-MCP (Model Context Protocol) will be used to connect external tools and data sources to agents.
-Planned use cases:
-- AlloyDB queries for student performance data
-- Quiz dataset lookups from curated educational content
-- External curriculum APIs
+This platform uses two open protocols alongside ADK's native orchestration:
 
-**Integration pattern (when implemented):**
-- Use `MCPToolset` from `google.adk.tools.mcp_tool.mcp_toolset`
-- Each MCP server is a separate process/container, registered as a tool in the relevant agent
-- Prefer connecting MCP tools to specific subject-tutor agents (not the root orchestrator) so
-  tool scope stays narrow and routing descriptions remain accurate
-- Store MCP server URLs and credentials in environment variables, never in code
+### 8.1 MCP — Agent ↔ Database (Phase 2)
+
+MCP (Model Context Protocol) connects agents to external tools and data sources.
+Our use: MCP Toolbox for Databases exposes AlloyDB quiz data as parameterized SQL tools.
+
+**Architecture:**
+- MCP Toolbox for Databases (Go binary) runs as a separate service
+- Configured via `tools.yaml` with AlloyDB `alloydb-postgres` source
+- Exposes tools: `get-quiz-question`, `get-quiz-answer`, `find-similar-easier-problems`
+- ADK connects via `MCPToolset` with `StreamableHTTPConnectionParams`
+
+**Key constraint:** MCP tools are function-calling tools. They **cannot coexist** with
+`code_execution` on the same agent (Gemini API Constraint 1). This is why `quiz_agent`
+is a dedicated agent — see Section 6.1, Constraint 3.
 
 ```python
-# Future pattern — do not add yet
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, SseServerParams
+# Phase 2 pattern — quiz_agent with MCPToolset
+from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
-quiz_tool = MCPToolset(
-    connection_params=SseServerParams(url="https://your-mcp-server/sse")
+quiz_toolset = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="http://127.0.0.1:5000/mcp",  # local dev
+    ),
+    tool_filter=['get-quiz-question', 'get-quiz-answer', 'find-similar-easier-problems'],
 )
-math_tutor_agent = Agent(
-    name='math_tutor_agent',
-    tools=[google_search, url_context, quiz_tool],   # MCP tool added alongside shared tools
+
+quiz_agent = Agent(
+    model='gemini-2.5-flash',
+    name='quiz_agent',
+    tools=[quiz_toolset],  # MCPToolset only — no code_executor
     ...
 )
 ```
 
-**Authentication:** For Cloud Run service-to-service MCP calls, use service account identity
-tokens (Cloud Run invoker role) — no API keys needed between internal services.
+### 8.2 AG-UI — Agent ↔ Frontend (Phase 3)
+
+AG-UI (Agent-User Interaction Protocol) standardizes real-time streaming between agent
+backends and user-facing frontends. It is officially supported by Google ADK.
+
+**Key resources:**
+- ADK docs: `google.github.io/adk-docs/integrations/ag-ui/`
+- Google blog: "Delight users by combining ADK Agents with Fancy Frontends using AG-UI"
+- PyPI: `ag-ui-adk` (bridge package)
+- Scaffold: `npx copilotkit@latest create -f adk`
+- Production middleware: `adk-agui-middleware` (Trend Micro, pip installable)
+
+**How it works:** Client POSTs to the agent endpoint; agent streams back JSON events via
+SSE (text chunks, tool calls, state deltas, lifecycle signals). CopilotKit React components
+consume the event stream and render in real time.
+
+### 8.3 Protocol Stack Summary
+
+| Protocol | Layer | Direction | Purpose |
+|----------|-------|-----------|---------|
+| AG-UI | Frontend ↔ Backend | Bidirectional (SSE) | Real-time streaming chat UI |
+| MCP | Backend ↔ Database | Request/Response | Quiz data access via parameterized SQL |
+| ADK | Agent ↔ Agent | Internal | Multi-agent orchestration, SequentialAgent, AgentTool |
+| A2A | Agent ↔ Agent (remote) | HTTP | Cross-framework agent interop (not needed — all agents co-located) |
+| A2UI | Agent → UI schema | Declarative JSON | Agent-generated dynamic UI components (future — v0.8) |
+
+**Authentication (Cloud Run):** For service-to-service calls (ADK backend → MCP Toolbox →
+AlloyDB), use service account identity tokens (Cloud Run invoker role) — no API keys needed
+between internal services.
 
 ---
 
@@ -421,53 +488,89 @@ them for student quizzes and concept-check questions.
 
 **Planned pipeline:**
 ```
-Hugging Face Hub
+Hugging Face Hub (primary: datavorous/entrance-exam-dataset + per-subject supplements)
     │  (datasets library — streaming or batch download)
     ▼
-Preprocessing script (Python)
-    │  - Normalize schema: {question, answer, subject, difficulty, source}
+Preprocessing scripts (Python, in scripts/data_pipeline/)
+    │  - Filter by subject tags, normalize to common schema
+    │  - Parse LaTeX/HTML, extract MCQ options + correct answer
+    │  - Classify difficulty (1-5) and topic tags via LLM where missing
     │  - Deduplicate and validate
+    │  - Generate embeddings via Vertex AI text-embedding-005
     ▼
-AlloyDB (Cloud SQL PostgreSQL-compatible)
-    │  - Table: quiz_questions
-    │  - Indexed by: subject, difficulty, topic_tag
+AlloyDB (free trial, asia-southeast1)
+    │  - Table: problems (pgvector + ScaNN index + AlloyDB AI)
+    │  - Indexed by: (subject, difficulty), ScaNN on embedding
+    │  - In-DB embedding generation: google_ml.embedding()
     ▼
-MCP Tool → Subject-Tutor Agent
-    │  (agent queries AlloyDB for relevant quiz questions)
+MCP Toolbox for Databases (tools.yaml → parameterized SQL)
+    │  - get-quiz-question(subject, difficulty)
+    │  - get-quiz-answer(problem_id)
+    │  - find-similar-easier-problems(topic, max_difficulty, subject)
+    ▼
+quiz_agent (MCPToolset, dedicated — no code_executor)
+    │  (routes: "quiz me on X", adaptive difficulty, hint delivery)
     ▼
 Student interaction (quiz mode)
 ```
 
-**Recommended Hugging Face datasets for math:**
-| Dataset | Content | Size |
-|---------|---------|------|
-| `lighteval/MATH` | Competition math, 5 difficulty levels | 12,500 problems |
-| `gsm8k` | Grade-school word problems with chain-of-thought | 8,500 problems |
-| `meta-math/MetaMathQA` | Augmented math QA | Large |
-| `TIGER-Lab/MathInstruct` | Diverse math instruction | Large |
+**Recommended datasets by subject (researched March 2025):**
 
-**Schema (when implemented):**
+| Subject | Primary Dataset | Supplement(s) | Est. Total | Difficulty Range |
+|---------|----------------|---------------|-----------|-----------------|
+| Math | `datavorous/entrance-exam-dataset` (JEE math) | `openai/gsm8k` (8.8K, MIT) + `deepmind/aqua_rat` (98K, Apache 2.0, MCQ) | ~50-60K | Grade school → competition |
+| Physics | `datavorous/entrance-exam-dataset` (JEE physics) | PHYSICS NeurIPS (`Zhengsh123/PHYSICS`, 8.3K EN, CC-BY-4.0) + `zhibei1204/PhysReason` (1.2K, MIT) | ~35-45K | Grade 2 → graduate |
+| Biology | `datavorous/entrance-exam-dataset` (NEET bio) | `TIGER-Lab/MMLU-Pro` bio subset (717, MIT) + `derek-thomas/ScienceQA` | ~8-12K | HS → undergrad |
+| Chemistry | `datavorous/entrance-exam-dataset` (JEE chem) | `TIGER-Lab/MMLU-Pro` chem subset (1,132, MIT) | ~8-12K | HS → undergrad |
+| Env. Science | AI-generated (Gemini + validation) | — | 600-800 | Beginner → advanced |
+
+**Cross-subject backbone:** `datavorous/entrance-exam-dataset` (97.4K total, CC-BY-4.0) covers math,
+physics, biology, and chemistry from JEE/NEET Indian competitive exams. Strong APAC narrative for judges.
+Ingest this first, then supplement per subject.
+
+**Ingestion order (incremental — verify after each step):**
+1. `datavorous/entrance-exam-dataset` — filter by subject tags, normalize, ingest all subjects
+2. `openai/gsm8k` — grade school math supplement
+3. `deepmind/aqua_rat` — HS/undergrad math MCQ supplement
+4. PHYSICS NeurIPS — textbook physics supplement
+5. `TIGER-Lab/MMLU-Pro` bio+chem — science supplement with CoT explanations
+6. AI-generate environmental science questions (600-800)
+
+**Schema:**
 ```sql
+-- Enable AlloyDB extensions
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS alloydb_scann;          -- AlloyDB-exclusive, faster than IVFFlat
+CREATE EXTENSION IF NOT EXISTS google_ml_integration CASCADE;  -- AlloyDB AI for in-DB embeddings
+
 CREATE TABLE problems (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source VARCHAR(100),           -- 'huggingface:lighteval/MATH'
-    subject VARCHAR(50),           -- 'algebra', 'geometry', etc.
+    source VARCHAR(100),           -- 'huggingface:datavorous/entrance-exam-dataset'
+    subject VARCHAR(50) NOT NULL,  -- 'math', 'physics', 'biology', 'chemistry', 'environmental_science'
     difficulty INT CHECK (difficulty BETWEEN 1 AND 5),
     problem_text TEXT NOT NULL,
     solution_text TEXT,
-    solution_steps JSONB,          -- structured steps for hints
-    metadata JSONB,                -- grade_level, topic_tags
-    embedding VECTOR(768),         -- pgvector for semantic search
+    solution_steps JSONB,          -- structured steps for hints (LoopAgent hint delivery)
+    options JSONB,                 -- MCQ answer choices: ["A. ...", "B. ...", ...]
+    correct_option VARCHAR(5),     -- 'A', 'B', 'C', 'D' for MCQ
+    metadata JSONB,                -- {topic_tags, source_exam, grade_level, answer_type}
+    embedding VECTOR(768),         -- pgvector for semantic search (text-embedding-005)
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
--- Semantic search index
-CREATE INDEX ON problems USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- Semantic search index (AlloyDB ScaNN — faster than IVFFlat)
+CREATE INDEX ON problems USING scann (embedding cosine);
 -- Filtering index
 CREATE INDEX ON problems (subject, difficulty);
 ```
 
-AlloyDB has native `pgvector` support — use it to find problems semantically similar to
-what a student is struggling with, enabling adaptive difficulty.
+AlloyDB has native `pgvector` + ScaNN support — use it to find problems semantically similar to
+what a student is struggling with, enabling adaptive difficulty. AlloyDB AI's `google_ml.embedding()`
+function generates query-time embeddings directly in SQL without application code.
+
+**Embedding strategy:**
+- **Ingestion time:** Vertex AI Embeddings API (`text-embedding-005`) via Python batch script
+- **Query time:** AlloyDB AI `google_ml.embedding('text-embedding-005', $1)` in MCP Toolbox SQL
+- **Must use same model** for both — mixing models produces incompatible vector spaces
 
 - Difficulty levels: `1` (beginner) → `5` (advanced)
 - All dataset ingestion scripts go in `scripts/data_pipeline/`
@@ -616,53 +719,82 @@ can be parallelized. Phase 1 is prerequisite for all others.
 
 ### Phase 2: MCP Integration & Quiz Database (Track 2 + Track 3)
 > **Goal:** Connect agents to a real database via MCP — the core of Track 2, powered by Track 3.
-> **Demonstrates:** MCPToolset, MCP Toolbox for Databases, AlloyDB/Cloud SQL with pgvector.
+> **Demonstrates:** MCPToolset, MCP Toolbox for Databases, AlloyDB with pgvector + ScaNN + AlloyDB AI.
+>
+> **Approach:** Incremental — ingest one dataset at a time, verify output after each step before proceeding.
+> AlloyDB setup is user-led (study phase first); implementation begins once AlloyDB instance is ready.
 
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
-| 2.1 | **AlloyDB / Cloud SQL for PostgreSQL setup** | Critical | Provision AlloyDB (preferred) or Cloud SQL for PostgreSQL (budget fallback) on Google Cloud. Enable pgvector extension. Both are natively supported by MCP Toolbox for Databases. Cloud SQL is significantly cheaper for a demo and has identical pgvector + MCP Toolbox support — use it if AlloyDB cost is prohibitive. |
-| 2.2 | **Quiz database schema** | Critical | Implement the `problems` table (see Section 9 schema). Key columns: `subject`, `difficulty`, `topic_tags` (JSONB), `embedding VECTOR(768)` for pgvector. Index by `(subject, difficulty)` and `ivfflat` for vector cosine similarity. Must support Math, Physics, and Science questions. |
-| 2.3 | **Quiz dataset ingestion pipeline** | Critical | Ingest `gsm8k` and/or `lighteval/MATH` from Hugging Face for Math. Source or generate Physics and Science question sets. Normalize schema. Generate embeddings using Vertex AI Embeddings API (`text-embedding-005`). Scripts go in `scripts/data_pipeline/`. |
-| 2.4 | **MCP Toolbox for Databases setup** | Critical | Use Google's [MCP Toolbox for Databases](https://github.com/googleapis/genai-toolbox) to expose quiz data as MCP tools. Configure `tools.yaml` with query tools: `get_quiz_question(subject, difficulty)`, `get_questions_by_topic(subject, topic)`, `get_similar_question(embedding, difficulty)`. Toolbox connects to AlloyDB/Cloud SQL instance. |
-| 2.5 | **Connect quiz MCP tools to subject agents** | Critical | Use `MCPToolset` from ADK to connect each subject-tutor agent to the MCP toolbox. Agents can now pull quiz questions contextually (e.g., "quiz me on algebra" triggers a database lookup via MCP for an appropriate question). |
-| 2.6 | **"Quiz Me" mode in root orchestrator** | High | Root agent detects quiz requests (e.g., "test me on calculus") and routes to the appropriate subject agent with quiz context. Agent fetches a question via MCP, presents it, evaluates the student's answer, and provides step-by-step feedback. |
-| 2.7 | **Semantic similarity for adaptive difficulty** | High | When a student struggles, use pgvector cosine similarity to find semantically related problems at an easier difficulty level. This is the key innovation differentiator — adaptive learning powered by vector search on AlloyDB/Cloud SQL. |
-| 2.8 | **ParallelAgent — fetch quiz + solve simultaneously** | Medium | Use ADK `ParallelAgent` to run a quiz question fetch (via MCP) in parallel with any pre-computation or context loading. Demonstrates Track 1 multi-agent patterns; pairs naturally with quiz mode (2.6). |
-| 2.9 | **LoopAgent — iterative hint delivery** | Medium | Use ADK `LoopAgent` to implement a hint loop: student attempts a problem → agent checks answer → if wrong, provides a hint and loops back → exit when correct or max hints reached. Demonstrates Track 1 patterns and improves pedagogical effectiveness. |
+| 2.1 | **AlloyDB setup (free trial)** | Critical | Provision AlloyDB free trial (30-day, 8 vCPU, $0). Region: `asia-southeast1` (Singapore) for APAC alignment. Enable extensions: `vector`, `alloydb_scann`, `google_ml_integration`. Configure Vertex AI integration for in-database embedding generation via `google_ml.embedding()`. User-led — study AlloyDB before provisioning. |
+| 2.2 | **Quiz database schema** | Critical | Implement the `problems` table (see Section 9 schema). Key columns: `subject`, `difficulty` (1-5), `problem_text`, `solution_text`, `solution_steps` (JSONB for hints), `options` + `correct_option` (MCQ), `metadata` (JSONB: topic_tags, source_exam, grade_level), `embedding VECTOR(768)`. ScaNN index on embeddings (AlloyDB-exclusive, faster than IVFFlat). B-tree on `(subject, difficulty)`. |
+| 2.3a | **Dataset ingestion — Step 1: entrance-exam-dataset** | Critical | Ingest `datavorous/entrance-exam-dataset` (97.4K, CC-BY-4.0). Filter by subject tags (math, physics, biology, chemistry). Normalize schema. Generate embeddings via Vertex AI `text-embedding-005`. This single dataset is the cross-subject backbone — covers JEE/NEET with solutions and topic tags. **Verify quiz queries work before proceeding.** Scripts in `scripts/data_pipeline/`. |
+| 2.3b | **Dataset ingestion — Step 2: Math supplements** | Critical | Ingest `openai/gsm8k` (8.8K, MIT, grade school) and `deepmind/aqua_rat` (98K, Apache 2.0, MCQ with rationales). Parse GSM8K `####` answers and `<<calc>>` annotations. AQuA-RAT is already MCQ-ready. Classify topics and difficulty via LLM during ingestion. **Verify after each dataset.** |
+| 2.3c | **Dataset ingestion — Step 3: Physics supplement** | High | Ingest PHYSICS NeurIPS dataset (`Zhengsh123/PHYSICS`, ~8.3K EN, CC-BY-4.0). Filter for English-only. Has 4 difficulty levels and 5 physics domains — maps directly to schema. Optionally add `zhibei1204/PhysReason` (1.2K, MIT) for challenge-mode problems. |
+| 2.3d | **Dataset ingestion — Step 4: Science supplements** | High | Ingest `TIGER-Lab/MMLU-Pro` biology (717) and chemistry (1,132) subsets — MIT license, has chain-of-thought explanations. Trim 10-option MCQ to 4-5 options. Optionally add `derek-thomas/ScienceQA` natural science subset for grade-leveled questions. |
+| 2.3e | **Dataset ingestion — Step 5: Environmental Science (AI-generated)** | High | No suitable dataset exists. Use Gemini to generate 600-800 MCQ questions across environmental science topics (ecosystems, climate change, pollution, conservation, renewable energy). Define topic taxonomy + 3 difficulty levels. Validate each question via a separate agent pass — discard disagreements. |
+| 2.4 | **MCP Toolbox for Databases setup** | Critical | Install [MCP Toolbox for Databases](https://github.com/googleapis/genai-toolbox) (Go binary). Configure `tools.yaml` with AlloyDB `alloydb-postgres` source + 3 parameterized SQL tools: `get-quiz-question(subject, difficulty)`, `get-quiz-answer(problem_id)`, `find-similar-easier-problems(topic_description, max_difficulty, subject)`. Semantic search tool uses AlloyDB AI `google_ml.embedding()` in SQL — no app-level embedding code. Run locally on `http://127.0.0.1:5000/mcp` for dev; deploy as separate Cloud Run service for prod. |
+| 2.5 | **Quiz agent + pipeline** | Critical | New dedicated `quiz_agent` with `MCPToolset` only (no `code_executor` — Gemini API rejects combining `code_execution` with function-calling tools, and MCP tools are function calls). Wrap in `quiz_pipeline` SequentialAgent with `make_response_formatter('quiz')`. Register as `AgentTool` on root_agent. Use `StreamableHTTPConnectionParams` for MCP transport. Add `quiz_agent.py` + `quiz_agent_prompt.py` following existing conventions. |
+| 2.6 | **"Quiz Me" mode in root orchestrator** | High | Root agent detects quiz requests ("quiz me", "test me on X") → routes to `quiz_pipeline`. Quiz agent fetches question via MCP, presents to student, evaluates answer against DB solution, provides step-by-step feedback. Update `root_agent_prompt.py` with quiz routing rules. |
+| 2.7 | **Semantic similarity for adaptive difficulty** | High | When student struggles, quiz agent calls `find-similar-easier-problems` — pgvector cosine similarity via AlloyDB AI + ScaNN index finds related problems at lower difficulty. Key innovation differentiator — adaptive learning powered by vector search. |
+| 2.8 | **ParallelAgent — fetch quiz + context** | Medium | Use ADK `ParallelAgent` to run quiz question fetch (MCP) in parallel with context loading. Demonstrates Track 1 multi-agent patterns; pairs naturally with quiz mode (2.6). |
+| 2.9 | **LoopAgent — iterative hint delivery** | Medium | Student attempts problem → agent checks answer → if wrong, provides progressive hint from `solution_steps` JSONB → loops until correct or max hints (3-5). Exit condition: correct answer OR hint limit. Demonstrates Track 1 patterns + pedagogical effectiveness. |
 
 ### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
-> **Goal:** Replace `adk web` with a polished student interface.
-> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability.
+> **Goal:** Replace `adk web` with a polished, student-facing interface with real-time streaming.
+> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability, AG-UI protocol.
 > **Can start in parallel with Phase 2** (mock data initially, connect to real agents later).
+>
+> **UI strategy (tiered):** Primary: AG-UI + CopilotKit + React (most impressive, officially supported
+> by Google ADK). Fallback: Streamlit + ADK `api_server` (proven patterns, faster if no React experience).
+> Decision point: assess React familiarity before committing.
+>
+> **Key research findings (March 2025):**
+> - AG-UI is officially supported by Google ADK — blog post, PyPI package (`ag-ui-adk`), ADK docs page
+> - `adk api_server` exposes `/run_sse` with token-level streaming — the backend is ready
+> - `get_fast_api_app()` lets you embed ADK endpoints in a custom FastAPI with extra routes
+> - `DatabaseSessionService` supports AlloyDB/Cloud SQL — reuse Phase 2 AlloyDB for sessions
+> - BuiltInCodeExecutor returns matplotlib as `inline_data` Parts (base64 PNG) — frontend renders inline
+> - Gemini 2.5 Flash supports 70+ languages including Bengali, Hindi, Tamil, Telugu, Indonesian, etc.
+> - A2UI (Google, v0.8) and Flutter GenUI SDK are future-direction — mention in submission, don't implement
 
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
-| 3.1 | **Student web UI** | Critical | Build with Streamlit or Gradio (fastest for hackathon). Features: chat interface, subject selector, formatted math/science output (Unicode, structured steps). Must render the formatter's output beautifully. |
-| 3.2 | **Student profile & onboarding** | High | Simple profile: name, grade level, preferred language, subjects of interest. Stored in session state for the demo. Used by agents to calibrate difficulty and language. |
-| 3.3 | **Quiz mode UI** | High | Dedicated quiz interface: question display, answer input, instant feedback, score tracking. Visual progress indicator (e.g., 3/10 questions completed). |
-| 3.4 | **Multilingual APAC language support** | High | Gemini natively supports Hindi, Bahasa Indonesia, Thai, Vietnamese, Tagalog, Chinese, Japanese, Korean, etc. Add language detection on student input and instruct agents to respond in the student's preferred language. Low effort, very high APAC relevance for judges. |
-| 3.5 | **Session progress display** | Medium | Show topics covered and quiz scores within the current session. In-memory only (no persistent DB needed for demo). Visual summary at end of session. |
+| 3.1 | **ADK backend API** | Critical | Use `get_fast_api_app()` with `web=False` + `DatabaseSessionService` (AlloyDB). Exposes `/run_sse` for streaming + session CRUD. Add custom endpoints: `/health`, student profile. Single FastAPI service — reuse AlloyDB from Phase 2 for both quiz data and session persistence. `allow_origins` configured for frontend domain. |
+| 3.2 | **Student web UI** | Critical | **Primary:** AG-UI + CopilotKit + React/Next.js. Scaffold: `npx copilotkit@latest create -f adk`. Bridge: `ag-ui-adk` PyPI package (or Trend Micro's `adk-agui-middleware`). Real-time token streaming, tool-call visualization, custom React components for formatted math output, inline matplotlib images. ADK docs: `google.github.io/adk-docs/integrations/ag-ui/`. **Fallback:** Streamlit with `st.chat_message`, `st.write_stream`, `st.latex()`, `st.pyplot()`. Google Codelab exists for Gradio+ADK on Cloud Run as alternative fallback. |
+| 3.3 | **Quiz mode UI** | High | Dedicated quiz interface within chat: question display with MCQ options, answer input, instant feedback with step-by-step solution reveal, score tracking in session state. Visual progress indicator (e.g., 3/10 completed). Works with `quiz_pipeline` from Phase 2. |
+| 3.4 | **Student profile & onboarding** | High | Simple profile: name, grade level, preferred language, subjects of interest. Stored in session state (`user:` prefix for cross-session persistence via `DatabaseSessionService`). Agents calibrate difficulty and language from profile. Language selector for APAC languages. |
+| 3.5 | **Multilingual APAC language support** | High | Gemini natively supports Bengali (bn), Hindi (hi), Tamil (ta), Telugu (te), Indonesian (id), Thai (th), Vietnamese (vi), Filipino (fil), Chinese (zh), Japanese (ja), Korean (ko), and 60+ others. Implementation: (a) language selector in student profile, (b) store as `{preferred_language}` in session state, (c) root agent prompt: "Respond in {preferred_language}". No external translation API needed — Gemini handles detection and generation natively. Zero code effort, very high APAC judge impact. |
+| 3.6 | **Inline image rendering** | High | `BuiltInCodeExecutor` returns matplotlib as `inline_data` Parts (base64 PNG in event `content.parts`). Frontend extracts image parts, renders as inline `<img src="data:image/png;base64,..."/>` (React) or `st.image()` (Streamlit). Must render within chat flow alongside formatted text, not as separate artifacts. |
+| 3.7 | **Session progress display** | Medium | Show topics covered, quiz scores, and subjects explored within current session. Aggregated from session state. Visual summary at end of session or on demand. |
+| 3.8 | **Mobile responsiveness** | Medium | APAC students primarily access via smartphones. AG-UI/React: fully custom responsive CSS, mobile-first layout. Streamlit: responsive by default but not mobile-first. Test in Chrome DevTools mobile viewport for demo video. Mention PWA as production roadmap item in submission. |
 
 ### Phase 4: Cloud Deployment & Polish (Technical Merit)
 > **Goal:** Deploy on Google Cloud to provide judges a live URL.
 > **Demonstrates:** Production readiness, Vertex AI integration, Cloud Run scalability.
+>
+> **Deployment architecture:** Three Cloud Run services + AlloyDB.
+> Service 1: Frontend (React/Next.js or Streamlit). Service 2: ADK backend (`get_fast_api_app()`).
+> Service 3: MCP Toolbox for Databases. All connect to AlloyDB (asia-southeast1).
 
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
-| 4.1 | **Switch to Vertex AI** | High | Set `GOOGLE_GENAI_USE_VERTEXAI=1`. Configure project, region. Zero code changes needed — only env vars. Shows production-grade auth and compliance awareness. |
-| 4.2 | **Cloud Run deployment** | High | Containerize with Dockerfile. Deploy agent backend to Cloud Run. Configure `--timeout 300`, `--concurrency 1`, min instances 1. Provide judges a live URL. |
-| 4.3 | **Observability** | Low | Integrate Cloud Logging and Cloud Trace. Nice-to-have for demo, shows production thinking. |
+| 4.1 | **Switch to Vertex AI** | High | Set `GOOGLE_GENAI_USE_VERTEXAI=1`. Configure project, region. Zero agent code changes — only env vars. Shows production-grade auth and compliance awareness. Service account identity replaces API key. |
+| 4.2 | **Cloud Run deployment — ADK backend** | High | Custom Dockerfile with `get_fast_api_app()` + `uvicorn`. `--timeout 300` (agentic chains take 30-60s), `--concurrency 1` (session safety), min instances 1. `DatabaseSessionService` URI points to AlloyDB. Env vars: `GOOGLE_GENAI_USE_VERTEXAI=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`. |
+| 4.3 | **Cloud Run deployment — Frontend** | High | If React: build static assets, serve via nginx or Node.js Cloud Run service. If Streamlit: `streamlit run app.py --server.port=${PORT:-8501}`. Configure CORS between frontend and backend services. |
+| 4.4 | **Cloud Run deployment — MCP Toolbox** | High | Deploy MCP Toolbox for Databases as separate Cloud Run service. Toolbox connects to AlloyDB via AlloyDB connector (IAM auth, no passwords in prod). ADK backend connects to Toolbox via service URL. |
+| 4.5 | **Observability** | Low | Integrate Cloud Logging and Cloud Trace. Track token consumption per agent per turn. Nice-to-have for demo, shows production thinking. |
 
 ### Phase 5: Demo & Submission Preparation
 > **Goal:** Create compelling submission materials.
 
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
-| 5.1 | **APAC impact narrative** | Critical | Write project description framing the platform as solving STEM education access inequality across APAC — 250M+ students in the region lack access to quality tutors. Cite specific stats for India, Indonesia, Philippines. |
-| 5.2 | **3-minute demo video** | Critical | Structure: Problem (30s) → Solution vision (30s) → Live demo of multi-subject tutoring + quiz mode + multilingual (90s) → Architecture & Google Cloud stack (30s) → Impact & roadmap (30s). Upload to YouTube, public. |
-| 5.3 | **Judge access instructions** | Critical | Provide: live Cloud Run URL (or local setup guide), test student account, sample queries per subject, quiz mode walkthrough. |
-| 5.4 | **Architecture diagram** | High | Visual showing: Root Agent → Subject Agents → MCP Toolbox → AlloyDB/Cloud SQL (pgvector) → Student UI. Highlight all Google Cloud components. |
-| 5.5 | **README overhaul** | High | Rewrite README.md as the public-facing project showcase: problem statement, APAC relevance, architecture diagram, tech stack, setup instructions, screenshots/GIFs. |
+| 5.1 | **APAC impact narrative** | Critical | Write project description framing the platform as solving STEM education access inequality across APAC — 250M+ students in the region lack access to quality tutors. Cite specific stats for India, Indonesia, Philippines, Bangladesh. Emphasize: JEE/NEET dataset provenance, Bengali/Hindi/Tamil language support, mobile-first design for smartphone-primary student populations. |
+| 5.2 | **3-minute demo video** | Critical | Structure: Problem (30s) → Solution vision (30s) → Live demo: multi-subject tutoring + quiz mode with adaptive difficulty + multilingual (90s) → Architecture & Google Cloud stack: ADK + AG-UI + MCP Toolbox + AlloyDB + pgvector + Vertex AI (30s) → Impact & roadmap: A2UI, Flutter GenUI, PWA (30s). Upload to YouTube, public. |
+| 5.3 | **Judge access instructions** | Critical | Provide: live Cloud Run URL, sample student profile, sample queries per subject (math, physics, science), quiz mode walkthrough ("quiz me on algebra"), multilingual demo ("Bengali mein samjhao"). |
+| 5.4 | **Architecture diagram** | High | Visual showing full stack: Student Browser → AG-UI (CopilotKit) → ADK Backend (FastAPI + Gemini 2.5 Flash) → Root Agent → Subject Pipelines (SequentialAgent) → MCP Toolbox → AlloyDB (pgvector + ScaNN + AlloyDB AI). Highlight all Google Cloud components. Show protocol layers: AG-UI, MCP, ADK orchestration. |
+| 5.5 | **README overhaul** | High | Rewrite README.md as the public-facing project showcase: problem statement, APAC relevance, architecture diagram, tech stack table, protocol stack (AG-UI + MCP + ADK), setup instructions, screenshots/GIFs of each feature. |
 
 ### Deferred (Post-Hackathon)
 > These items are valuable but not required for a winning demo submission.
@@ -674,19 +806,55 @@ can be parallelized. Phase 1 is prerequisite for all others.
 | D.3 | **Token measurement baseline** | Post-hackathon | Measure tokens per agent per turn across short, medium, and long sessions. Reintroduce `before_model_callback` history trimming on subject tutors if needed after measurement. |
 | D.4 | **Test suite** | Post-hackathon | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
 | D.5 | **Enterprise web search** | Post-hackathon | Replace `google_search` with `enterprise_web_search` on Vertex AI for FERPA/COPPA compliance in production. |
+| D.6 | **A2UI + Flutter GenUI SDK** | Post-hackathon | Migrate frontend to Flutter using Google's A2UI protocol (v0.8) and GenUI SDK (alpha). Agents generate declarative UI components rendered natively on mobile/web. Google's recommended production direction for agent UIs. |
+| D.7 | **PWA for offline access** | Post-hackathon | Convert frontend to Progressive Web App for offline-capable mobile access in low-connectivity APAC regions. Service worker caches UI shell + previously loaded content. "Add to Home Screen" for app-like experience. |
 
 ### Phase Summary — Execution Order
 
 ```
-Phase 1 (Core Expansion)        ←── START HERE, prerequisite for all
+Phase 1 (Core Expansion)        ←── ✅ COMPLETE
     ↓
 Phase 2 (MCP + Database)        ←── Primary track (Track 2 + 3), highest differentiation
-    ↓                                 ↕ (can overlap)
+    │                                 AlloyDB study first → then incremental dataset ingestion
+    │                                 ↕ (can overlap)
 Phase 3 (Student UI)             ←── Start in parallel with Phase 2
+    │                                 AG-UI + CopilotKit (primary) or Streamlit (fallback)
+    │                                 Backend: get_fast_api_app() + DatabaseSessionService
     ↓
 Phase 4 (Cloud Deployment)       ←── After core features work locally
+    │                                 3 Cloud Run services + AlloyDB
     ↓
 Phase 5 (Demo & Submission)      ←── Final, after everything works
+```
+
+### Full Stack Architecture (Target)
+
+```
+Student Browser (mobile / desktop)
+    │
+    ▼  AG-UI protocol (SSE)
+Frontend ─── Cloud Run Service 1 (React/Next.js + CopilotKit)
+    │
+    ▼  POST /run_sse (streaming: true)
+ADK Backend ─── Cloud Run Service 2 (FastAPI + get_fast_api_app)
+    │  DatabaseSessionService → AlloyDB (sessions)
+    │
+    ├──► root_tutor_agent (orchestrator)
+    │    ├── math_pipeline      [google_search + code_executor → formatter]
+    │    ├── physics_pipeline   [google_search + code_executor → formatter]
+    │    ├── science_pipeline   [google_search → formatter]
+    │    └── quiz_pipeline      [MCPToolset → formatter]
+    │                               │
+    │                               ▼  MCP (HTTP)
+    │                          MCP Toolbox ─── Cloud Run Service 3
+    │                               │
+    ▼                               ▼  AlloyDB connector
+AlloyDB (asia-southeast1, free trial)
+    ├── problems (quiz data + pgvector + ScaNN + AlloyDB AI)
+    └── adk_sessions (DatabaseSessionService)
+
+Protocols: AG-UI (frontend↔backend) │ MCP (backend↔database) │ ADK (agent orchestration)
+Google Cloud: Vertex AI │ Cloud Run │ AlloyDB │ pgvector │ AlloyDB AI
 ```
 
 ---

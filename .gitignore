@@ -4,3 +4,7 @@ tutor_platform/.adk/session.db
 **/*.pyc
 .adk/
 .claude/settings.local.json
+scripts/infra/env.sh
+scripts/infra/env.ps1
+scripts/infra/alloydb-auth-proxy
+scripts/infra/alloydb-auth-proxy.exe
