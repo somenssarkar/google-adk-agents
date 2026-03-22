@@ -1,8 +1,8 @@
-# Scripts — Infrastructure Setup & Data Pipeline
+# Scripts — Infrastructure Setup, Data Pipeline & MCP Toolbox
 
-This directory contains all scripts for provisioning the AlloyDB database and ingesting quiz
-datasets. They were written as part of **Phase 2** of the AI Tutoring Platform hackathon roadmap
-(MCP + Database layer).
+This directory contains all scripts for provisioning the AlloyDB database, ingesting quiz
+datasets, and running the MCP Toolbox for Databases server. Written as part of **Phase 2**
+of the AI Tutoring Platform hackathon roadmap (MCP + Database layer).
 
 ---
 
@@ -21,7 +21,9 @@ scripts/
 │   ├── setup_database.sh            ← Step 3: Create database, extensions, schema
 │   ├── setup_database.sql           ← SQL schema (run by setup_database.sh)
 │   ├── start_proxy.sh               ← Start AlloyDB Auth Proxy (Linux/macOS)
-│   └── start_proxy.ps1              ← Start AlloyDB Auth Proxy (Windows)
+│   ├── start_proxy.ps1              ← Start AlloyDB Auth Proxy (Windows)
+│   ├── start_toolbox.sh             ← Start MCP Toolbox server (Linux/macOS/Cloud Shell)
+│   └── start_toolbox.ps1            ← Start MCP Toolbox server (Windows)
 └── data_pipeline/                   ← Dataset ingestion (run after infra is ready)
     ├── requirements.txt             ← Python dependencies for ingestion scripts
     ├── ingest_gsm8k.py              ← Ingest openai/gsm8k (math, grade school)
@@ -299,14 +301,85 @@ uses ADC. Also verify `INSTANCE_URI` in `env.sh` matches your AlloyDB instance U
 
 ---
 
-## Next Step: MCP Toolbox for Databases
+## Phase 2.4: MCP Toolbox for Databases
 
-With AlloyDB provisioned and data ingested, the next phase is **Phase 2.4 — MCP Toolbox for
-Databases**. This will expose the `problems` table to the `quiz_agent` via three parameterized
-SQL tools:
+The MCP Toolbox for Databases (Go binary from `github.com/googleapis/genai-toolbox`) exposes
+the AlloyDB `problems` table to ADK agents via the MCP protocol over HTTP. The `quiz_agent`
+connects to it at `http://127.0.0.1:5000/mcp` in local dev.
 
-- `get-quiz-question(subject, difficulty)`
-- `get-quiz-answer(problem_id)`
-- `find-similar-easier-problems(topic_description, max_difficulty, subject)`
+### How it works
 
-See CLAUDE.md §8.1 and §13 (Phase 2.4) for the implementation plan.
+```
+quiz_agent (ADK)
+    │  MCPToolset (StreamableHTTPConnectionParams)
+    ▼
+MCP Toolbox server  ←── mcp_toolbox/tools.yaml
+    │  AlloyDB Go connector (uses ADC — no Auth Proxy needed)
+    ▼
+AlloyDB (tutor_db.problems)
+    │  google_ml.embedding() for find-similar-easier-problems
+    ▼
+Vertex AI text-embedding-005
+```
+
+The toolbox uses the **AlloyDB Go connector** built in — it does not need the Auth Proxy.
+ADC (`gcloud auth application-default login`) is sufficient for both the connector auth and
+the Vertex AI embedding calls made inside AlloyDB.
+
+### Tools exposed (defined in mcp_toolbox/tools.yaml)
+
+| Tool | Parameters | Purpose |
+|------|-----------|---------|
+| `get-quiz-question` | `subject`, `difficulty` | Fetch a random question at the given level |
+| `get-quiz-answer` | `problem_id` | Retrieve correct answer + full solution |
+| `find-similar-easier-problems` | `topic_description`, `max_difficulty`, `subject` | Semantic search for simpler related problems |
+
+### Starting the toolbox locally
+
+**Terminal 1 — start the server (keep open):**
+
+```bash
+# Cloud Shell / Linux / macOS
+bash scripts/infra/start_toolbox.sh
+```
+
+```powershell
+# Windows (local dev)
+.\scripts\infra\start_toolbox.ps1
+```
+
+Both scripts auto-download the toolbox binary on first run (into `scripts/infra/`).
+The binary is gitignored — it is re-downloaded as needed.
+
+**Terminal 2 — verify the server is running:**
+
+```bash
+curl http://127.0.0.1:5000/api/toolset/quiz-tools
+# Should return JSON listing the 3 tools
+```
+
+**Terminal 3 — run the ADK agent:**
+
+```bash
+adk web   # quiz_agent will connect to the running toolbox
+```
+
+### Toolbox binary versioning
+
+The version is pinned in both start scripts (`TOOLBOX_VERSION`). To upgrade:
+1. Check the latest release at `github.com/googleapis/genai-toolbox/releases`
+2. Update `TOOLBOX_VERSION` in both `start_toolbox.sh` and `start_toolbox.ps1`
+3. Delete the cached binary (`scripts/infra/toolbox` or `toolbox.exe`) — it re-downloads on next run
+
+---
+
+## Next Step: Quiz Agent (Phase 2.5)
+
+With the MCP Toolbox server running, the next phase is **Phase 2.5 — Quiz Agent**:
+
+- `tutor_platform/subagents/quiz_agent.py` — new `LlmAgent` with `MCPToolset`
+- `tutor_platform/prompts/quiz_agent_prompt.py` — quiz delivery + answer evaluation logic
+- Wire `quiz_pipeline` (SequentialAgent) into `tutor_platform/agent.py`
+- Update `root_agent_prompt.py` with quiz routing rules (Phase 2.6)
+
+See CLAUDE.md §8.1 and §13 (Phase 2.5–2.6) for the implementation plan.

@@ -59,8 +59,11 @@ google-adk-agents/
 └── README.md                       # Human-facing project overview
 ```
 
-> **Note:** `tutor_platform/` is the ADK package root. `adk web` is run from the repo root,
-> and ADK discovers the `root_agent` exported by `tutor_platform/agent.py`.
+> **Note:** `tutor_platform/` is the ADK package root. Run `adk web` from the repo root.
+> ADK lists all subdirectories in the UI dropdown — **always select `tutor_platform`**.
+> Do not select `mcp_toolbox/` — it is a service config directory with no `root_agent`
+> and will 500 if selected. `mcp_toolbox` may be the default/first selection alphabetically,
+> so always verify the dropdown shows `tutor_platform` before sending any message.
 
 ---
 
@@ -934,7 +937,7 @@ pip install google-adk
 cp tutor_platform/.env.example tutor_platform/.env   # then fill in GOOGLE_API_KEY
 
 # Run the agent locally
-adk web   # from repo root — opens browser UI
+adk web   # from repo root — then select 'tutor_platform' from the dropdown (not mcp_toolbox)
 ```
 
 **Required environment variables (local):**

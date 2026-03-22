@@ -1,0 +1,182 @@
+# MCP Toolbox for Databases — AI Tutoring Platform
+#
+# This file configures the genai-toolbox server (Go binary from
+# github.com/googleapis/genai-toolbox). The toolbox exposes parameterized SQL
+# queries to ADK agents via the MCP (Model Context Protocol) over HTTP.
+#
+# Local dev:  toolbox --tools-file mcp_toolbox/tools.yaml
+#             Listens at http://127.0.0.1:5000/mcp
+#
+# Production: deployed as a separate Cloud Run service (Phase 4).
+#             ADK backend connects via the Cloud Run service URL.
+#
+# Authentication:
+#   - Local: gcloud auth application-default login (ADC) + DB_PASSWORD env var
+#   - Cloud Run: service account identity (no DB_PASSWORD needed — IAM auth)
+#
+# Env vars required locally:
+#   DB_PASSWORD — AlloyDB postgres password (from Secret Manager, see scripts/infra/)
+
+# ---------------------------------------------------------------------------
+# Sources — database connections
+# ---------------------------------------------------------------------------
+sources:
+  alloydb-tutor:
+    kind: alloydb-postgres
+    project: genai-apac-demo-project
+    region: asia-southeast1
+    cluster: tutor-cluster
+    instance: tutor-instance
+    database: tutor_db
+    user: postgres
+    password: ${DB_PASSWORD}
+
+# ---------------------------------------------------------------------------
+# Tools — parameterized SQL queries exposed to agents
+# ---------------------------------------------------------------------------
+tools:
+
+  # -------------------------------------------------------------------------
+  # get-quiz-question
+  #
+  # Returns a single quiz question for a given subject and difficulty level.
+  # Uses RANDOM() for variety — each call returns a different question.
+  # The returned problem_id must be passed to get-quiz-answer for evaluation.
+  # -------------------------------------------------------------------------
+  get-quiz-question:
+    kind: postgres-sql
+    source: alloydb-tutor
+    description: >
+      Fetches a single quiz question for a given subject and difficulty level.
+      Returns the problem text, multiple-choice options (if MCQ), and a
+      problem_id that must be passed to get-quiz-answer to check the student's
+      answer. Call this to start a quiz session or present the next question.
+    parameters:
+      - name: subject
+        type: string
+        description: >
+          The subject area. Must be one of: math, physics, biology, chemistry,
+          environmental_science. Use exactly these values — they match the
+          database subject column.
+      - name: difficulty
+        type: integer
+        description: >
+          Difficulty level: 1 (beginner / grade school) through 5 (advanced /
+          competition level). Start at 2 for a new student. Adjust up or down
+          based on whether the student is answering correctly.
+    statement: |
+      SELECT
+        id::text          AS problem_id,
+        subject,
+        difficulty,
+        problem_text,
+        options,
+        metadata
+      FROM problems
+      WHERE subject   = $1
+        AND difficulty = $2
+      ORDER BY RANDOM()
+      LIMIT 1;
+
+  # -------------------------------------------------------------------------
+  # get-quiz-answer
+  #
+  # Retrieves the correct answer and full solution for a specific problem.
+  # Always call this after the student submits their answer — never guess
+  # the correct answer from context.
+  # -------------------------------------------------------------------------
+  get-quiz-answer:
+    kind: postgres-sql
+    source: alloydb-tutor
+    description: >
+      Retrieves the correct answer and full step-by-step solution for a
+      specific problem. Call this after the student has submitted their answer.
+      Use correct_option to evaluate whether the student is right, and
+      solution_text + solution_steps to explain the solution.
+    parameters:
+      - name: problem_id
+        type: string
+        description: >
+          The UUID of the problem, exactly as returned by get-quiz-question in
+          the problem_id field. Do not construct or guess this value.
+    statement: |
+      SELECT
+        id::text          AS problem_id,
+        correct_option,
+        solution_text,
+        solution_steps
+      FROM problems
+      WHERE id = $1::uuid;
+
+  # -------------------------------------------------------------------------
+  # find-similar-easier-problems
+  #
+  # Semantic similarity search using AlloyDB AI (google_ml.embedding).
+  # The topic_description is embedded in-database via Vertex AI
+  # text-embedding-005 and compared against stored embeddings using
+  # pgvector cosine distance (<=>). Returns problems on the same concept
+  # but at a lower difficulty — the core of adaptive difficulty.
+  #
+  # WHY in-database embedding: The MCP Toolbox SQL runs inside AlloyDB.
+  # google_ml.embedding() calls Vertex AI directly from within the database,
+  # eliminating the need for application-side embedding code in the quiz agent.
+  # The AlloyDB service agent must have roles/aiplatform.user (setup_iam.sh).
+  # -------------------------------------------------------------------------
+  find-similar-easier-problems:
+    kind: postgres-sql
+    source: alloydb-tutor
+    description: >
+      Finds problems that are semantically similar to a given topic description
+      but at a lower difficulty level. Use this when a student is struggling
+      with a problem — present an easier question on the same concept to build
+      foundational understanding before retrying the harder problem.
+      Powered by AlloyDB AI vector similarity (text-embedding-005 + ScaNN).
+    parameters:
+      - name: topic_description
+        type: string
+        description: >
+          A natural-language description of the topic or concept the student is
+          struggling with. Examples: "fraction division", "Newton's second law
+          of motion", "cellular respiration and ATP", "balancing chemical
+          equations". This text is embedded by AlloyDB AI (Vertex AI) at query
+          time and compared against stored problem embeddings.
+      - name: max_difficulty
+        type: integer
+        description: >
+          Maximum difficulty level for returned problems (1–5, inclusive).
+          Set this one level below the problem the student is struggling with.
+          For example, if they are stuck on a difficulty-3 problem, pass 2.
+      - name: subject
+        type: string
+        description: >
+          Subject filter — must match the subject of the problem the student is
+          struggling with. One of: math, physics, biology, chemistry,
+          environmental_science.
+    statement: |
+      SELECT
+        id::text          AS problem_id,
+        subject,
+        difficulty,
+        problem_text,
+        options,
+        metadata
+      FROM problems
+      WHERE subject    = $3
+        AND difficulty <= $2
+        AND embedding IS NOT NULL
+      ORDER BY
+        embedding <=> google_ml.embedding('text-embedding-005', $1)::vector
+      LIMIT 3;
+
+# ---------------------------------------------------------------------------
+# Toolsets — named groups of tools exposed to agents
+#
+# The quiz_agent in ADK connects with tool_filter pointing to this toolset.
+# Only tools listed here are visible to the agent — other toolsets (if any
+# are added later) remain isolated.
+# ---------------------------------------------------------------------------
+toolsets:
+  quiz-tools:
+    - get-quiz-question
+    - get-quiz-answer
+    - find-similar-easier-problems

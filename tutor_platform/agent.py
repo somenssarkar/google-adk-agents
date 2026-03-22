@@ -5,6 +5,7 @@ from google.adk.tools.agent_tool import AgentTool
 from .subagents.math_tutor import math_tutor_agent
 from .subagents.physics_tutor import physics_tutor_agent
 from .subagents.science_tutor import science_tutor_agent
+from .subagents.quiz_agent import quiz_agent
 from .subagents.response_formatter import make_response_formatter
 from .prompts.root_agent_prompt import ROOT_AGENT_INSTRUCTION
 
@@ -68,6 +69,38 @@ science_pipeline = SequentialAgent(
 )
 
 # ---------------------------------------------------------------------------
+# Quiz Pipeline — SequentialAgent for interactive student assessment
+#
+# WHY MCPToolset only on quiz_agent (no code_executor, no google_search):
+# MCP tools are function-calling tools. The Gemini API rejects combining
+# code_execution (built-in) with any function-calling tool in the same request.
+# The quiz_agent therefore uses MCPToolset exclusively — it fetches questions
+# from AlloyDB via MCP Toolbox and evaluates answers from the database.
+# See CLAUDE.md §6.1 Constraint 3 for full details.
+#
+# The MCP Toolbox server must be running before this pipeline can function:
+#   bash scripts/infra/start_toolbox.sh      (Cloud Shell / Linux / macOS)
+#   .\scripts\infra\start_toolbox.ps1        (Windows)
+# ---------------------------------------------------------------------------
+quiz_pipeline = SequentialAgent(
+    name='quiz_pipeline',
+    description=(
+        "Interactive quiz and practice pipeline for student assessment across all subjects. "
+        "Fetches questions from the database, evaluates student answers, provides adaptive "
+        "feedback, and offers easier reinforcement questions when a student is struggling. "
+        "Covers: math, physics, biology, chemistry, and environmental science. "
+        "Call this for any quiz, test, practice session, or 'quiz me on X' request."
+    ),
+    # WHY no response_formatter here (unlike subject pipelines):
+    # The response_formatter is designed to reformat tutoring SOLUTIONS (step-by-step math,
+    # LaTeX → Unicode, TYPE A/B/C classification). Quiz output is conversational —
+    # questions with MCQ options, answer evaluations, hints, feedback. The formatter
+    # classifies quiz content as a malformed solution and returns its fallback message.
+    # The quiz_agent already produces clear, student-ready output that needs no transformation.
+    sub_agents=[quiz_agent],
+)
+
+# ---------------------------------------------------------------------------
 # Root Tutor Agent — LlmAgent orchestrator
 #
 # WHY AgentTool instead of sub_agents:
@@ -83,13 +116,14 @@ root_agent = Agent(
     description=(
         "Root orchestrator for an AI-powered school tutoring platform. Routes student "
         "questions to the appropriate subject pipeline: Mathematics, Physics, or Science "
-        "(Biology, Chemistry, Environmental Science). Handles out-of-scope queries "
-        "gracefully by listing supported subjects."
+        "(Biology, Chemistry, Environmental Science). Routes quiz and practice requests "
+        "to the quiz pipeline. Handles out-of-scope queries gracefully."
     ),
     instruction=ROOT_AGENT_INSTRUCTION,
     tools=[
         AgentTool(agent=math_pipeline),
         AgentTool(agent=physics_pipeline),
         AgentTool(agent=science_pipeline),
+        AgentTool(agent=quiz_pipeline),
     ],
 )
