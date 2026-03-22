@@ -720,28 +720,27 @@ can be parallelized. Phase 1 is prerequisite for all others.
 | 1.5 | **Production error handling** | ⚠️ Partial | Formatter: `before_agent_callback` short-circuits LLM if `subject_solution` is empty — returns graceful fallback immediately. `include_contents='none'` eliminates history drift. Root orchestrator: prompt-level error recovery instructions added; code-level subagent failure catching deferred to Phase 4 (pre-Cloud Run). Sufficient for demo. |
 | 1.6 | **ADK workflow patterns showcase** | ⚠️ Partial | SequentialAgent deployed across all three subject pipelines (math, physics, science). ParallelAgent and LoopAgent deferred — they fit more naturally in Phase 2 (parallel quiz fetch + solve; iterative hint loop). See Phase 2 items 2.8 and 2.9. |
 
-### Phase 2: MCP Integration & Quiz Database (Track 2 + Track 3)
+### Phase 2: MCP Integration & Quiz Database (Track 2 + Track 3) — ✅ COMPLETE
 > **Goal:** Connect agents to a real database via MCP — the core of Track 2, powered by Track 3.
 > **Demonstrates:** MCPToolset, MCP Toolbox for Databases, AlloyDB with pgvector + ScaNN + AlloyDB AI.
->
-> **Approach:** Incremental — ingest one dataset at a time, verify output after each step before proceeding.
-> AlloyDB setup is user-led (study phase first); implementation begins once AlloyDB instance is ready.
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 2.1 | **AlloyDB setup (free trial)** | Critical | Provision AlloyDB free trial (30-day, 8 vCPU, $0). Region: `asia-southeast1` (Singapore) for APAC alignment. Enable extensions: `vector`, `alloydb_scann`, `google_ml_integration`. Configure Vertex AI integration for in-database embedding generation via `google_ml.embedding()`. User-led — study AlloyDB before provisioning. |
-| 2.2 | **Quiz database schema** | Critical | Implement the `problems` table (see Section 9 schema). Key columns: `subject`, `difficulty` (1-5), `problem_text`, `solution_text`, `solution_steps` (JSONB for hints), `options` + `correct_option` (MCQ), `metadata` (JSONB: topic_tags, source_exam, grade_level), `embedding VECTOR(768)`. ScaNN index on embeddings (AlloyDB-exclusive, faster than IVFFlat). B-tree on `(subject, difficulty)`. |
-| 2.3a | **Dataset ingestion — Step 1: entrance-exam-dataset** | Critical | Ingest `datavorous/entrance-exam-dataset` (97.4K, CC-BY-4.0). Filter by subject tags (math, physics, biology, chemistry). Normalize schema. Generate embeddings via Vertex AI `text-embedding-005`. This single dataset is the cross-subject backbone — covers JEE/NEET with solutions and topic tags. **Verify quiz queries work before proceeding.** Scripts in `scripts/data_pipeline/`. |
-| 2.3b | **Dataset ingestion — Step 2: Math supplements** | Critical | Ingest `openai/gsm8k` (8.8K, MIT, grade school) and `deepmind/aqua_rat` (98K, Apache 2.0, MCQ with rationales). Parse GSM8K `####` answers and `<<calc>>` annotations. AQuA-RAT is already MCQ-ready. Classify topics and difficulty via LLM during ingestion. **Verify after each dataset.** |
-| 2.3c | **Dataset ingestion — Step 3: Physics supplement** | High | Ingest PHYSICS NeurIPS dataset (`Zhengsh123/PHYSICS`, ~8.3K EN, CC-BY-4.0). Filter for English-only. Has 4 difficulty levels and 5 physics domains — maps directly to schema. Optionally add `zhibei1204/PhysReason` (1.2K, MIT) for challenge-mode problems. |
-| 2.3d | **Dataset ingestion — Step 4: Science supplements** | High | Ingest `TIGER-Lab/MMLU-Pro` biology (717) and chemistry (1,132) subsets — MIT license, has chain-of-thought explanations. Trim 10-option MCQ to 4-5 options. Optionally add `derek-thomas/ScienceQA` natural science subset for grade-leveled questions. |
-| 2.3e | **Dataset ingestion — Step 5: Environmental Science (AI-generated)** | High | No suitable dataset exists. Use Gemini to generate 600-800 MCQ questions across environmental science topics (ecosystems, climate change, pollution, conservation, renewable energy). Define topic taxonomy + 3 difficulty levels. Validate each question via a separate agent pass — discard disagreements. |
-| 2.4 | **MCP Toolbox for Databases setup** | Critical | Install [MCP Toolbox for Databases](https://github.com/googleapis/genai-toolbox) (Go binary). Configure `tools.yaml` with AlloyDB `alloydb-postgres` source + 3 parameterized SQL tools: `get-quiz-question(subject, difficulty)`, `get-quiz-answer(problem_id)`, `find-similar-easier-problems(topic_description, max_difficulty, subject)`. Semantic search tool uses AlloyDB AI `google_ml.embedding()` in SQL — no app-level embedding code. Run locally on `http://127.0.0.1:5000/mcp` for dev; deploy as separate Cloud Run service for prod. |
-| 2.5 | **Quiz agent + pipeline** | Critical | New dedicated `quiz_agent` with `MCPToolset` only (no `code_executor` — Gemini API rejects combining `code_execution` with function-calling tools, and MCP tools are function calls). Wrap in `quiz_pipeline` SequentialAgent with `make_response_formatter('quiz')`. Register as `AgentTool` on root_agent. Use `StreamableHTTPConnectionParams` for MCP transport. Add `quiz_agent.py` + `quiz_agent_prompt.py` following existing conventions. |
-| 2.6 | **"Quiz Me" mode in root orchestrator** | High | Root agent detects quiz requests ("quiz me", "test me on X") → routes to `quiz_pipeline`. Quiz agent fetches question via MCP, presents to student, evaluates answer against DB solution, provides step-by-step feedback. Update `root_agent_prompt.py` with quiz routing rules. |
-| 2.7 | **Semantic similarity for adaptive difficulty** | High | When student struggles, quiz agent calls `find-similar-easier-problems` — pgvector cosine similarity via AlloyDB AI + ScaNN index finds related problems at lower difficulty. Key innovation differentiator — adaptive learning powered by vector search. |
-| 2.8 | **ParallelAgent — fetch quiz + context** | Medium | Use ADK `ParallelAgent` to run quiz question fetch (MCP) in parallel with context loading. Demonstrates Track 1 multi-agent patterns; pairs naturally with quiz mode (2.6). |
-| 2.9 | **LoopAgent — iterative hint delivery** | Medium | Student attempts problem → agent checks answer → if wrong, provides progressive hint from `solution_steps` JSONB → loops until correct or max hints (3-5). Exit condition: correct answer OR hint limit. Demonstrates Track 1 patterns + pedagogical effectiveness. |
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 2.1 | **AlloyDB setup (free trial)** | ✅ Done | Cluster: tutor-cluster, Instance: tutor-instance, Region: asia-southeast1. Extensions: vector, alloydb_scann, google_ml_integration. Public IP: 34.124.206.1. |
+| 2.2 | **Quiz database schema** | ✅ Done | `problems` table with 12 columns. ScaNN index on embedding, B-tree on (subject, difficulty), GIN on problem_text. |
+| 2.3a | **Dataset ingestion — entrance-exam-dataset** | ⚠️ Skipped | `datavorous/entrance-exam-dataset` loading script deprecated and broken on HuggingFace. Replaced by MMLU-Pro. |
+| 2.3b | **Dataset ingestion — Math (GSM8K)** | ✅ Done | 8,792 math problems ingested. Script: `scripts/data_pipeline/ingest_gsm8k.py`. |
+| 2.3c | **Dataset ingestion — Physics** | ✅ Done | 1,304 physics problems via TIGER-Lab/MMLU-Pro (physics category). `Zhengsh123/PHYSICS` was private/inaccessible. Script: `ingest_mmlu_pro.py --subjects physics`. |
+| 2.3d | **Dataset ingestion — Biology + Chemistry** | ✅ Done | Biology: 722, Chemistry: 1,137 via TIGER-Lab/MMLU-Pro. Script: `ingest_mmlu_pro.py`. |
+| 2.3e | **Dataset ingestion — Environmental Science (AI-generated)** | ✅ Done | 570 MCQ questions generated via Gemini 2.5 Flash across 15 topics × 3 difficulty levels. Script: `generate_env_science.py`. |
+| 2.4 | **MCP Toolbox for Databases setup** | ✅ Done | `mcp_toolbox/tools.yaml` with 3 SQL tools. Start scripts: `start_toolbox.sh` + `start_toolbox.ps1`. Tested at `http://127.0.0.1:5000/mcp`. |
+| 2.5 | **Quiz agent + pipeline** | ✅ Done | `quiz_agent.py` + `quiz_agent_prompt.py`. MCPToolset only. `check_answer` deterministic comparison tool. `quiz_hint_given` state tracking for 1st vs 2nd wrong attempt. No response_formatter in quiz_pipeline. |
+| 2.6 | **"Quiz Me" mode in root orchestrator** | ✅ Done | Root agent routes quiz signals to quiz_pipeline. `root_agent_prompt.py` updated with quiz routing rules. |
+| 2.7 | **Semantic similarity for adaptive difficulty** | ✅ Done | `find-similar-easier-problems` tool in tools.yaml uses pgvector cosine distance + AlloyDB AI `google_ml.embedding()`. |
+| 2.8 | **ParallelAgent — fetch quiz + context** | ⏳ Deferred | Deferred to post-Phase 3. Lower priority than UI for judging. |
+| 2.9 | **LoopAgent — iterative hint delivery** | ⏳ Deferred | Deferred to post-Phase 3. Hint delivery handled via session state (`quiz_hint_given`) instead. |
+
+**Total quiz database: 12,525 questions across 5 subjects (math, physics, biology, chemistry, environmental_science).**
 
 ### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
 > **Goal:** Replace `adk web` with a polished, student-facing interface with real-time streaming.

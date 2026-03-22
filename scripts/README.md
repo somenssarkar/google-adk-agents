@@ -27,7 +27,9 @@ scripts/
 └── data_pipeline/                   ← Dataset ingestion (run after infra is ready)
     ├── requirements.txt             ← Python dependencies for ingestion scripts
     ├── ingest_gsm8k.py              ← Ingest openai/gsm8k (math, grade school)
-    └── ingest_entrance_exam.py      ← Ingest datavorous/entrance-exam-dataset (multi-subject)
+    ├── ingest_entrance_exam.py      ← Ingest datavorous/entrance-exam-dataset (multi-subject)
+    ├── ingest_mmlu_pro.py           ← Ingest TIGER-Lab/MMLU-Pro (biology + chemistry)
+    └── generate_env_science.py      ← AI-generate environmental science MCQs via Gemini
 ```
 
 ---
@@ -252,15 +254,52 @@ python ingest_entrance_exam.py --subject physics --limit 500
 
 ### Upcoming Datasets (not yet ingested)
 
-| Phase | Dataset | Subject | Notes |
-|-------|---------|---------|-------|
-| 2.3c | `Zhengsh123/PHYSICS` (~8.3K, CC-BY-4.0) | Physics | 4 difficulty levels, 5 domains |
-| 2.3c | `zhibei1204/PhysReason` (1.2K, MIT) | Physics | Challenge-level problems |
-| 2.3d | `TIGER-Lab/MMLU-Pro` bio subset (717, MIT) | Biology | Has chain-of-thought explanations |
-| 2.3d | `TIGER-Lab/MMLU-Pro` chem subset (1.1K, MIT) | Chemistry | 10-option MCQ → trim to 4 |
-| 2.3e | AI-generated (Gemini + validation) | Env. Science | 600–800 questions, no dataset exists |
+| Phase | Dataset | Subject | Script | Status |
+|-------|---------|---------|--------|--------|
+| 2.3c | `Zhengsh123/PHYSICS` | Physics | ~~`ingest_physics.py`~~ | ⚠️ Private — use MMLU-Pro |
+| 2.3c | `TIGER-Lab/MMLU-Pro` physics (~1.3K, MIT) | Physics | `ingest_mmlu_pro.py` | Ready |
+| 2.3d | `TIGER-Lab/MMLU-Pro` bio (717, MIT) | Biology | `ingest_mmlu_pro.py` | Ready |
+| 2.3d | `TIGER-Lab/MMLU-Pro` chem (1.1K, MIT) | Chemistry | `ingest_mmlu_pro.py` | Ready |
+| 2.3e | AI-generated (Gemini + validation) | Env. Science | `generate_env_science.py` | Ready |
 
-New ingestion scripts for these datasets will follow the same structure as `ingest_gsm8k.py`.
+### Dataset 3 — Physics + Biology + Chemistry (MMLU-Pro)
+
+```bash
+python ingest_mmlu_pro.py --explore
+python ingest_mmlu_pro.py --dry-run --limit 20
+python ingest_mmlu_pro.py --subjects biology   # Biology only first
+python ingest_mmlu_pro.py                      # Both biology + chemistry
+```
+
+**Verify:**
+```sql
+SELECT subject, count(*) FROM problems WHERE subject IN ('biology','chemistry') GROUP BY subject;
+```
+
+### Dataset 5 — Environmental Science (AI-generated)
+
+This script uses Gemini to generate MCQ questions across 15 topics × 3 difficulty levels.
+A second Gemini call validates each question before ingestion.
+
+```bash
+# Set API key (local dev) or use Vertex AI (Cloud Shell)
+export GOOGLE_API_KEY=your_key_here
+# OR: export GOOGLE_GENAI_USE_VERTEXAI=1
+
+# Dry run — generates 2 questions per slot, prints them, no DB write
+python generate_env_science.py --dry-run --questions-per-slot 2 --topics ecosystems,climate_change
+
+# Full generation (~675 questions across all topics)
+python generate_env_science.py
+
+# Skip validation pass for speed (not recommended for production data)
+python generate_env_science.py --skip-validation
+```
+
+**Verify:**
+```sql
+SELECT count(*), difficulty FROM problems WHERE subject='environmental_science' GROUP BY difficulty;
+```
 
 ---
 
