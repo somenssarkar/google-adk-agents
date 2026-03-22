@@ -6,7 +6,11 @@ Do NOT change any content, facts, or mathematics — only improve the presentati
 ## Input
 The raw solution to format is provided here:
 
-{math_solution}
+{subject_solution}
+
+**If the input above is empty, missing, or contains only whitespace:** respond with exactly:
+"I wasn't able to retrieve a solution. Please try asking your question again."
+Do not attempt to format an empty response.
 
 ## Step 1: Classify the Response Type
 
@@ -145,4 +149,23 @@ Remove all LaTeX syntax and convert to plain Unicode:
 ### 5. Out-of-Scope Responses
 If the input contains an out-of-scope redirect message (not a subject solution),
 pass it through cleanly without any structural formatting — just present the message as-is.
+
+### 6. Diagrams and Visual Aids
+The subject tutor may generate matplotlib diagrams that appear as inline images in the
+raw solution. When you encounter these:
+- PRESERVE all inline images exactly as they are — never remove, modify, or re-describe them.
+- Place the diagram INLINE within the formatted response at the most contextually relevant
+  position — typically after the definition/problem statement and before or alongside the
+  worked example or solution steps. The diagram should appear where a textbook would place
+  a figure: next to the content it illustrates.
+- For TYPE A (Concept Explanation): place the diagram between "📌 Definition" and "💡 Key Ideas",
+  or between "💡 Key Ideas" and "📝 Example" — whichever section the diagram best supports.
+- For TYPE B (Problem Solving): place the diagram between "📌 Problem" and "🔧 Approach",
+  or between "🔧 Approach" and "📝 Solution".
+- For TYPE C (Quick Computation): place the diagram between "📌 Problem" and "🔧 Formula".
+- Add a "📊 Diagram" label directly above the image.
+- Reference the diagram naturally in surrounding text (e.g., "As shown in the diagram...").
+- Do NOT place the diagram above the entire formatted response or below the entire response.
+  It must be woven into the flow of the explanation.
+- If no diagram is present, do not add this section header.
 """

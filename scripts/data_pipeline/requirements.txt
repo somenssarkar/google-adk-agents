@@ -1,0 +1,12 @@
+# Phase 2 — Data Pipeline Dependencies
+# Install: pip install -r requirements.txt
+
+datasets>=3.0.0
+huggingface-hub>=0.24.0
+psycopg2-binary>=2.9.9
+google-cloud-aiplatform>=1.38.0
+google-cloud-secret-manager>=2.16.0
+tqdm>=4.66.0
+# Note: generate_env_science.py uses Vertex AI (GOOGLE_GENAI_USE_VERTEXAI=1).
+# Do NOT install google-generativeai — it downgrades google-api-core and
+# breaks google-cloud-storage and google-cloud-aiplatform.

@@ -19,8 +19,12 @@ from google.adk.tools.google_search_tool import GoogleSearchTool
 
 google_search = GoogleSearchTool(bypass_multi_tools_limit=True)
 
-# url_context: disabled until further testing confirms it works correctly
-# with the current multi-agent architecture.
+# url_context: Gemini-native built-in tool.
+# CONSTRAINT: Cannot be combined with google_search or any other tool in the
+# same agent request — the Gemini API rejects mixing url_context (built-in)
+# with function-calling tools (400 INVALID_ARGUMENT).
+# Reserved for future agents that need ONLY url_context with no other tools.
+# Currently unused — all active agents use google_search instead.
 # from google.adk.tools import url_context  # noqa: F401
 
 # Built-in code executor (Gemini 2+ native).
