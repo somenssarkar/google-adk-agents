@@ -359,6 +359,22 @@ def main() -> None:
         "or Environmental Science** — or say **'quiz me on [topic]'** to test yourself."
     )
 
+    # Starter ideas — always visible so testers can scroll up and refer to them
+    st.markdown("#### 💡 Try asking...")
+    st.markdown(
+        """
+| # | What to try | Sample input |
+|---|-------------|-------------|
+| 1 | **Math tutoring** | *"What is the pythagorean theorem?"* |
+| 2 | **Physics tutoring** | *"Explain Newton's second law"* |
+| 3 | **Science tutoring** | *"How does photosynthesis work?"* |
+| 4 | **Chemistry** | *"What is the periodic table trend for electronegativity?"* |
+| 5 | **Environmental Science** | *"Explain the greenhouse effect"* |
+| 6 | **Quiz mode** | *"Quiz me on algebra"* or use a sidebar 🎯 button |
+"""
+    )
+    st.divider()
+
     # Replay chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
