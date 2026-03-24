@@ -744,32 +744,35 @@ can be parallelized. Phase 1 is prerequisite for all others.
 
 ### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
 > **Goal:** Replace `adk web` with a polished, student-facing interface with real-time streaming.
-> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability, AG-UI protocol.
-> **Can start in parallel with Phase 2** (mock data initially, connect to real agents later).
+> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability.
 >
-> **UI strategy (tiered):** Primary: AG-UI + CopilotKit + React (most impressive, officially supported
-> by Google ADK). Fallback: Streamlit + ADK `api_server` (proven patterns, faster if no React experience).
-> Decision point: assess React familiarity before committing.
+> **UI decision: Streamlit chosen** (over AG-UI + React). Rationale: no React experience needed,
+> Python-only, demo-ready in hours vs days, ADK technical depth is the judging differentiator.
+> AG-UI/React remains a post-hackathon upgrade path.
 >
-> **Key research findings (March 2025):**
-> - AG-UI is officially supported by Google ADK — blog post, PyPI package (`ag-ui-adk`), ADK docs page
-> - `adk api_server` exposes `/run_sse` with token-level streaming — the backend is ready
-> - `get_fast_api_app()` lets you embed ADK endpoints in a custom FastAPI with extra routes
-> - `DatabaseSessionService` supports AlloyDB/Cloud SQL — reuse Phase 2 AlloyDB for sessions
-> - BuiltInCodeExecutor returns matplotlib as `inline_data` Parts (base64 PNG) — frontend renders inline
-> - Gemini 2.5 Flash supports 70+ languages including Bengali, Hindi, Tamil, Telugu, Indonesian, etc.
-> - A2UI (Google, v0.8) and Flutter GenUI SDK are future-direction — mention in submission, don't implement
+> **Session persistence architecture (researched 2026-03-22):**
+> - ADK `DatabaseSessionService` persists state to PostgreSQL/AlloyDB via SQLAlchemy async.
+> - `user:` prefix keys go to `StorageUserState` table — persist across ALL sessions for a user_id.
+> - `{user:preferred_language}`, `{user:grade_level}`, `{user:name}` inject directly into agent prompts.
+> - Migration: `session_service_uri="sqlite+aiosqlite:///./sessions.db"` → `"postgresql+asyncpg://..."` — 1 line change.
+> - `auto_create_session=True` in `get_fast_api_app()` — Streamlit needs no session pre-creation call.
+> - ADK auto-creates schema tables on startup. No manual migrations needed.
+>
+> **Key implementation files:**
+> - `main.py` — FastAPI backend (`get_fast_api_app()` + SQLite dev / AlloyDB prod)
+> - `streamlit_app.py` — Streamlit chat UI with streaming, profile, quiz shortcuts
+> - `requirements-ui.txt` — UI-specific dependencies
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 3.1 | **ADK backend API** | Critical | Use `get_fast_api_app()` with `web=False` + `DatabaseSessionService` (AlloyDB). Exposes `/run_sse` for streaming + session CRUD. Add custom endpoints: `/health`, student profile. Single FastAPI service — reuse AlloyDB from Phase 2 for both quiz data and session persistence. `allow_origins` configured for frontend domain. |
-| 3.2 | **Student web UI** | Critical | **Primary:** AG-UI + CopilotKit + React/Next.js. Scaffold: `npx copilotkit@latest create -f adk`. Bridge: `ag-ui-adk` PyPI package (or Trend Micro's `adk-agui-middleware`). Real-time token streaming, tool-call visualization, custom React components for formatted math output, inline matplotlib images. ADK docs: `google.github.io/adk-docs/integrations/ag-ui/`. **Fallback:** Streamlit with `st.chat_message`, `st.write_stream`, `st.latex()`, `st.pyplot()`. Google Codelab exists for Gradio+ADK on Cloud Run as alternative fallback. |
-| 3.3 | **Quiz mode UI** | High | Dedicated quiz interface within chat: question display with MCQ options, answer input, instant feedback with step-by-step solution reveal, score tracking in session state. Visual progress indicator (e.g., 3/10 completed). Works with `quiz_pipeline` from Phase 2. |
-| 3.4 | **Student profile & onboarding** | High | Simple profile: name, grade level, preferred language, subjects of interest. Stored in session state (`user:` prefix for cross-session persistence via `DatabaseSessionService`). Agents calibrate difficulty and language from profile. Language selector for APAC languages. |
-| 3.5 | **Multilingual APAC language support** | High | Gemini natively supports Bengali (bn), Hindi (hi), Tamil (ta), Telugu (te), Indonesian (id), Thai (th), Vietnamese (vi), Filipino (fil), Chinese (zh), Japanese (ja), Korean (ko), and 60+ others. Implementation: (a) language selector in student profile, (b) store as `{preferred_language}` in session state, (c) root agent prompt: "Respond in {preferred_language}". No external translation API needed — Gemini handles detection and generation natively. Zero code effort, very high APAC judge impact. |
-| 3.6 | **Inline image rendering** | High | `BuiltInCodeExecutor` returns matplotlib as `inline_data` Parts (base64 PNG in event `content.parts`). Frontend extracts image parts, renders as inline `<img src="data:image/png;base64,..."/>` (React) or `st.image()` (Streamlit). Must render within chat flow alongside formatted text, not as separate artifacts. |
-| 3.7 | **Session progress display** | Medium | Show topics covered, quiz scores, and subjects explored within current session. Aggregated from session state. Visual summary at end of session or on demand. |
-| 3.8 | **Mobile responsiveness** | Medium | APAC students primarily access via smartphones. AG-UI/React: fully custom responsive CSS, mobile-first layout. Streamlit: responsive by default but not mobile-first. Test in Chrome DevTools mobile viewport for demo video. Mention PWA as production roadmap item in submission. |
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 3.1 | **ADK backend API** | ✅ Done | `main.py` at repo root. `get_fast_api_app()` with `session_service_uri` + `auto_create_session=True`. Dev: SQLite. Prod (Phase 4): swap to `postgresql+asyncpg://...` pointing at AlloyDB. |
+| 3.2 | **Student web UI** | ✅ Done | `streamlit_app.py` at repo root. Streaming chat via `/run_sse`, sidebar profile form, subject shortcuts (tutoring + quiz), session info panel, New Session button. |
+| 3.3 | **Quiz mode UI** | ✅ Done | Quiz mode works through chat — quiz shortcuts in sidebar trigger quiz_pipeline. MCQ options, evaluation, hints all rendered as chat messages. No separate UI needed. |
+| 3.4 | **Student profile & onboarding** | ✅ Done | Profile form in sidebar: name, grade (1–12 + undergraduate), preferred language. Stored in ADK session state with `user:` prefix on session creation. Root agent prompt injects `{user:name}`, `{user:grade_level}`, `{user:preferred_language}`. Phase 3.4 upgrade: swap SQLite → AlloyDB for cross-device persistence. |
+| 3.5 | **Multilingual APAC language support** | ✅ Done | Language selector in sidebar (12 APAC languages + English). Stored as `user:preferred_language`. Root agent prompt instructs Gemini to respond in that language. Zero translation API cost. |
+| 3.6 | **Inline image rendering** | ✅ Done | Streamlit `st.write_stream()` renders markdown including base64 images from BuiltInCodeExecutor output. |
+| 3.7 | **Session continuity across refreshes** | ✅ Done | `user_id` and `session_id` persisted in `st.query_params` (URL). Page refresh restores same ADK session. "New Session" button in sidebar starts fresh. |
+| 3.8 | **Mobile responsiveness** | ⚠️ Partial | Streamlit is responsive by default. Not mobile-first. Sufficient for demo. PWA noted as post-hackathon roadmap item. |
 
 ### Phase 4: Cloud Deployment & Polish (Technical Merit)
 > **Goal:** Deploy on Google Cloud to provide judges a live URL.

@@ -1,6 +1,8 @@
 from google.adk.agents.llm_agent import Agent
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.tools.agent_tool import AgentTool
+from google.adk.agents.callback_context import CallbackContext
+from google.genai import types as genai_types
 
 from .subagents.math_tutor import math_tutor_agent
 from .subagents.physics_tutor import physics_tutor_agent
@@ -8,6 +10,38 @@ from .subagents.science_tutor import science_tutor_agent
 from .subagents.quiz_agent import quiz_agent
 from .subagents.response_formatter import make_response_formatter
 from .prompts.root_agent_prompt import ROOT_AGENT_INSTRUCTION
+
+# ---------------------------------------------------------------------------
+# Student profile initializer — before_agent_callback on root_agent
+#
+# WHY: root_agent_prompt.py references {user:name}, {user:grade_level},
+# {user:preferred_language} via ADK template substitution. These keys live
+# in session state with the "user:" prefix (cross-session persistence via
+# DatabaseSessionService). On the very first request from a new student
+# (before the Streamlit UI sends a stateDelta with profile values), ADK
+# would substitute empty strings, causing a blank template or broken prompt.
+# This callback sets safe defaults before the LLM call so substitution
+# always succeeds. Once the student saves their profile in the UI, the
+# stateDelta from the frontend overwrites these defaults.
+# ---------------------------------------------------------------------------
+_PROFILE_DEFAULTS = {
+    "user:name": "Student",
+    "user:grade_level": "Not specified",
+    "user:preferred_language": "English",
+}
+
+
+def _init_student_profile(callback_context: CallbackContext) -> genai_types.Content | None:
+    """Initialize user: state keys with safe defaults if not yet set.
+
+    Returns None to let the agent proceed normally.
+    """
+    state = callback_context.state
+    for key, default in _PROFILE_DEFAULTS.items():
+        if not state.get(key):
+            state[key] = default
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Subject Pipelines — SequentialAgent pattern
@@ -120,6 +154,7 @@ root_agent = Agent(
         "to the quiz pipeline. Handles out-of-scope queries gracefully."
     ),
     instruction=ROOT_AGENT_INSTRUCTION,
+    before_agent_callback=_init_student_profile,
     tools=[
         AgentTool(agent=math_pipeline),
         AgentTool(agent=physics_pipeline),

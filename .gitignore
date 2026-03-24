@@ -1,6 +1,7 @@
 .venv/
 tutor_platform/.env
 tutor_platform/.adk/session.db
+sessions.db
 **/*.pyc
 .adk/
 .claude/settings.local.json
