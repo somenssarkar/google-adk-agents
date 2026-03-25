@@ -1,6 +1,6 @@
 from google.adk.agents.llm_agent import Agent
 
-from ..tools import google_search, code_executor
+from ..tools import code_executor
 from ..prompts.math_tutor_prompt import MATH_TUTOR_INSTRUCTION
 
 # Self-contained math tutor subagent.
@@ -34,7 +34,6 @@ math_tutor_agent = Agent(
         "Call this agent for any mathematics question."
     ),
     instruction=MATH_TUTOR_INSTRUCTION,
-    tools=[google_search],
     code_executor=code_executor,
     output_key='subject_solution',
 )

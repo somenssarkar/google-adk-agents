@@ -15,13 +15,15 @@ import json
 import re
 import uuid
 
+import os
+
 import httpx
 import streamlit as st
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 APP_NAME = "tutor_platform"
 
 LANGUAGES = [
@@ -133,7 +135,7 @@ def _stream_agent_response(message: str, state_delta: dict | None = None):
             "role": "user",
             "parts": [{"text": message}],
         },
-        "streaming": True,
+        "streaming": False,
     }
     if state_delta:
         payload["stateDelta"] = state_delta
@@ -185,12 +187,6 @@ def _stream_agent_response(message: str, state_delta: dict | None = None):
 
                     # ADK sends two root agent events per turn:
                     #   1. partial=True  — incremental streaming chunks  → yield
-                    #   2. partial=False — complete response after stream → SKIP (duplicate)
-                    # Checking explicitly for False (not just falsy) so that events
-                    # with no `partial` key (non-streaming agents) still pass through.
-                    if is_root and event.get("partial") is False:
-                        continue
-
                     content = event.get("content")
                     if not content:
                         continue
@@ -237,11 +233,27 @@ def _fetch_artifact(filename: str) -> bytes | None:
             if inline:
                 data = inline.get("data", "")
                 if data:
-                    # ADK encodes as URL-safe base64; pad to multiple of 4
                     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
     except Exception:
         pass
     return None
+
+
+def _list_session_artifacts() -> list[str]:
+    """List all artifact filenames for the current session."""
+    list_url = (
+        f"{BACKEND_URL}/apps/{APP_NAME}"
+        f"/users/{st.session_state.uid}"
+        f"/sessions/{st.session_state.sid}"
+        f"/artifacts"
+    )
+    try:
+        resp = httpx.get(list_url, timeout=10.0)
+        if resp.status_code == 200:
+            return resp.json() if isinstance(resp.json(), list) else []
+    except Exception:
+        pass
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +390,21 @@ def main() -> None:
     # Replay chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            diagram_marker = re.search(r'📊\s*Diagram', msg["content"])
+            msg_images = msg.get("images", [])
+            if msg_images and diagram_marker:
+                before = msg["content"][:diagram_marker.start()].strip()
+                after = msg["content"][diagram_marker.end():].strip()
+                if before:
+                    st.markdown(before)
+                for img_bytes in msg_images:
+                    st.image(img_bytes)
+                if after:
+                    st.markdown(after)
+            else:
+                st.markdown(msg["content"])
+                for img_bytes in msg_images:
+                    st.image(img_bytes)
 
     # Resolve message: explicit user input takes priority over quick-action
     prompt: str | None = None
@@ -408,36 +434,44 @@ def main() -> None:
                     _stream_agent_response(prompt, state_delta)
                 )
 
-            # If the response references artifact filenames, fetch them and re-render
-            # the full response with each image placed inline where the filename appears.
-            filenames = list(dict.fromkeys(_ARTIFACT_RE.findall(full_response)))
-            if filenames:
-                images = {f: _fetch_artifact(f) for f in filenames}
+            # Fetch any artifacts created during this turn (list endpoint is
+            # more reliable than regex — formatter may drop the filename from text).
+            artifacts_before = set(st.session_state.get("known_artifacts", []))
+            all_artifacts = _list_session_artifacts()
+            new_artifacts = [f for f in all_artifacts if f not in artifacts_before
+                             and f.endswith(".png")]
+            st.session_state["known_artifacts"] = all_artifacts
+
+            img_list: list[bytes] = []
+            if new_artifacts:
+                images = {f: _fetch_artifact(f) for f in new_artifacts}
                 images = {f: b for f, b in images.items() if b}
                 if images:
-                    # Replace each filename with an embedded base64 image (first
-                    # occurrence only — subsequent occurrences removed). Render as
-                    # a single markdown block so the image is truly inline with no
-                    # text duplication from splitting around the filename.
-                    clean = re.sub(
-                        r'Diagram [Ss]aved as artifact:\s*', '', full_response
-                    )
-                    rendered_filenames: set[str] = set()
-
-                    def _replace(m: re.Match) -> str:
-                        fname = m.group(1)
-                        if fname in images and fname not in rendered_filenames:
-                            rendered_filenames.add(fname)
-                            b64 = base64.b64encode(images[fname]).decode()
-                            return f"\n![diagram](data:image/png;base64,{b64})\n"
-                        return ""  # drop duplicate filename references
-
-                    final_md = _ARTIFACT_RE.sub(_replace, clean)
+                    img_list = list(images.values())
+                    # Find where "📊 Diagram" appears in the response and insert
+                    # images there; if no marker found, append after the text.
+                    diagram_marker = re.search(r'📊\s*Diagram', full_response)
                     slot.empty()
                     with slot.container():
-                        st.markdown(final_md)
+                        if diagram_marker:
+                            before = full_response[:diagram_marker.start()].strip()
+                            after = full_response[diagram_marker.end():].strip()
+                            if before:
+                                st.markdown(before)
+                            for img_bytes in img_list:
+                                st.image(img_bytes)
+                            if after:
+                                st.markdown(after)
+                        else:
+                            st.markdown(full_response)
+                            for img_bytes in img_list:
+                                st.image(img_bytes)
 
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": full_response,
+            "images": img_list,
+        })
 
 
 if __name__ == "__main__":

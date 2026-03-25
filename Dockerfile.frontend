@@ -1,0 +1,47 @@
+# Dockerfile.frontend — Streamlit student UI (Service 1)
+#
+# Runs streamlit_app.py on PORT (Cloud Run injects $PORT).
+# BACKEND_URL must point to the deployed ADK backend Cloud Run service URL.
+#
+# Build:  docker build -f Dockerfile.frontend -t tutor-frontend .
+# Run locally:
+#   docker run -p 8501:8501 \
+#     -e BACKEND_URL=https://tutor-backend-HASH-as.a.run.app \
+#     tutor-frontend
+
+FROM python:3.12-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-ui.txt .
+RUN pip install --no-cache-dir -r requirements-ui.txt
+
+COPY streamlit_app.py .
+
+# Streamlit config: disable telemetry prompt, set server settings for Cloud Run
+RUN mkdir -p /root/.streamlit && cat > /root/.streamlit/config.toml << 'EOF'
+[browser]
+gatherUsageStats = false
+
+[server]
+# Cloud Run injects $PORT — Streamlit reads it via --server.port below
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+EOF
+
+ENV PORT=8501
+
+# BACKEND_URL is injected at runtime via Cloud Run env var
+# Falls back to localhost for local testing
+ENV BACKEND_URL=http://localhost:8000
+
+CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=${PORT} --server.address=0.0.0.0 --server.headless=true"]

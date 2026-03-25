@@ -1,6 +1,6 @@
 from google.adk.agents.llm_agent import Agent
 
-from ..tools import google_search, code_executor
+from ..tools import code_executor
 from ..prompts.physics_tutor_prompt import PHYSICS_TUTOR_INSTRUCTION
 
 # Self-contained physics tutor subagent.
@@ -31,7 +31,6 @@ physics_tutor_agent = Agent(
         "Call this agent for any physics question."
     ),
     instruction=PHYSICS_TUTOR_INSTRUCTION,
-    tools=[google_search],
     code_executor=code_executor,
     output_key='subject_solution',
 )

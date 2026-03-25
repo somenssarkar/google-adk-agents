@@ -1,0 +1,33 @@
+# Dockerfile.toolbox — MCP Toolbox for Databases (Service 3)
+#
+# Downloads the genai-toolbox binary and runs it with tools.yaml.
+# DB_PASSWORD is injected at runtime from Secret Manager via Cloud Run.
+#
+# Build:  docker build -f Dockerfile.toolbox -t tutor-toolbox .
+# Run locally:
+#   docker run -p 5000:5000 \
+#     -e DB_PASSWORD=your-password \
+#     tutor-toolbox
+
+FROM alpine:3.19
+
+ENV TOOLBOX_VERSION=0.30.0
+
+# apk is fast (~10s); no slow Debian mirror needed
+RUN apk add --no-cache curl ca-certificates gcompat \
+    && curl -fsSL \
+    "https://storage.googleapis.com/genai-toolbox/v${TOOLBOX_VERSION}/linux/amd64/toolbox" \
+    -o /usr/local/bin/toolbox \
+    && chmod +x /usr/local/bin/toolbox
+
+WORKDIR /app
+
+# Copy only the toolbox config — no application code needed
+COPY mcp_toolbox/tools.yaml mcp_toolbox/tools.yaml
+
+# Cloud Run injects $PORT — toolbox listens on it
+ENV PORT=5000
+
+# DB_PASSWORD injected at runtime via Cloud Run secret or env var
+# --address 0.0.0.0 required for Cloud Run (rejects 127.0.0.1)
+CMD ["sh", "-c", "toolbox --tools-file mcp_toolbox/tools.yaml --address 0.0.0.0 --port ${PORT}"]
