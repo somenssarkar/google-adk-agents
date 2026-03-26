@@ -1,0 +1,5 @@
+# ADK Backend (Service 2) — FastAPI + uvicorn + ADK + AlloyDB session storage
+google-adk==1.26.0
+uvicorn>=0.29.0
+asyncpg>=0.29.0        # Async PostgreSQL driver for AlloyDB DatabaseSessionService
+greenlet>=3.0.0        # Required by SQLAlchemy async on Linux

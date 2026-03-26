@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 # Configuration — update TOOLBOX_VERSION to the latest release from:
 # https://github.com/googleapis/genai-toolbox/releases
 # ---------------------------------------------------------------------------
-$TOOLBOX_VERSION = "0.7.0"
+$TOOLBOX_VERSION = "0.30.0"
 $SCRIPT_DIR  = Split-Path -Parent $MyInvocation.MyCommand.Path   # scripts\infra\
 $REPO_ROOT   = Split-Path -Parent (Split-Path -Parent $SCRIPT_DIR) # repo root
 $TOOLS_FILE  = Join-Path $REPO_ROOT "mcp_toolbox\tools.yaml"

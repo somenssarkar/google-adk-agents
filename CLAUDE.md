@@ -744,89 +744,157 @@ can be parallelized. Phase 1 is prerequisite for all others.
 
 ### Phase 3: Student-Facing UI & Experience (UX — 20% of score)
 > **Goal:** Replace `adk web` with a polished, student-facing interface with real-time streaming.
-> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability, AG-UI protocol.
-> **Can start in parallel with Phase 2** (mock data initially, connect to real agents later).
+> **Demonstrates:** Seamless GenAI integration, intuitive design, real-world usability.
 >
-> **UI strategy (tiered):** Primary: AG-UI + CopilotKit + React (most impressive, officially supported
-> by Google ADK). Fallback: Streamlit + ADK `api_server` (proven patterns, faster if no React experience).
-> Decision point: assess React familiarity before committing.
+> **UI decision: Streamlit chosen** (over AG-UI + React). Rationale: no React experience needed,
+> Python-only, demo-ready in hours vs days, ADK technical depth is the judging differentiator.
+> AG-UI/React remains a post-hackathon upgrade path.
 >
-> **Key research findings (March 2025):**
-> - AG-UI is officially supported by Google ADK — blog post, PyPI package (`ag-ui-adk`), ADK docs page
-> - `adk api_server` exposes `/run_sse` with token-level streaming — the backend is ready
-> - `get_fast_api_app()` lets you embed ADK endpoints in a custom FastAPI with extra routes
-> - `DatabaseSessionService` supports AlloyDB/Cloud SQL — reuse Phase 2 AlloyDB for sessions
-> - BuiltInCodeExecutor returns matplotlib as `inline_data` Parts (base64 PNG) — frontend renders inline
-> - Gemini 2.5 Flash supports 70+ languages including Bengali, Hindi, Tamil, Telugu, Indonesian, etc.
-> - A2UI (Google, v0.8) and Flutter GenUI SDK are future-direction — mention in submission, don't implement
+> **Session persistence architecture (researched 2026-03-22):**
+> - ADK `DatabaseSessionService` persists state to PostgreSQL/AlloyDB via SQLAlchemy async.
+> - `user:` prefix keys go to `StorageUserState` table — persist across ALL sessions for a user_id.
+> - `{user:preferred_language}`, `{user:grade_level}`, `{user:name}` inject directly into agent prompts.
+> - Migration: `session_service_uri="sqlite+aiosqlite:///./sessions.db"` → `"postgresql+asyncpg://..."` — 1 line change.
+> - `auto_create_session=True` in `get_fast_api_app()` — Streamlit needs no session pre-creation call.
+> - ADK auto-creates schema tables on startup. No manual migrations needed.
+>
+> **Key implementation files:**
+> - `main.py` — FastAPI backend (`get_fast_api_app()` + SQLite dev / AlloyDB prod)
+> - `streamlit_app.py` — Streamlit chat UI with streaming, profile, quiz shortcuts
+> - `requirements-ui.txt` — UI-specific dependencies
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 3.1 | **ADK backend API** | Critical | Use `get_fast_api_app()` with `web=False` + `DatabaseSessionService` (AlloyDB). Exposes `/run_sse` for streaming + session CRUD. Add custom endpoints: `/health`, student profile. Single FastAPI service — reuse AlloyDB from Phase 2 for both quiz data and session persistence. `allow_origins` configured for frontend domain. |
-| 3.2 | **Student web UI** | Critical | **Primary:** AG-UI + CopilotKit + React/Next.js. Scaffold: `npx copilotkit@latest create -f adk`. Bridge: `ag-ui-adk` PyPI package (or Trend Micro's `adk-agui-middleware`). Real-time token streaming, tool-call visualization, custom React components for formatted math output, inline matplotlib images. ADK docs: `google.github.io/adk-docs/integrations/ag-ui/`. **Fallback:** Streamlit with `st.chat_message`, `st.write_stream`, `st.latex()`, `st.pyplot()`. Google Codelab exists for Gradio+ADK on Cloud Run as alternative fallback. |
-| 3.3 | **Quiz mode UI** | High | Dedicated quiz interface within chat: question display with MCQ options, answer input, instant feedback with step-by-step solution reveal, score tracking in session state. Visual progress indicator (e.g., 3/10 completed). Works with `quiz_pipeline` from Phase 2. |
-| 3.4 | **Student profile & onboarding** | High | Simple profile: name, grade level, preferred language, subjects of interest. Stored in session state (`user:` prefix for cross-session persistence via `DatabaseSessionService`). Agents calibrate difficulty and language from profile. Language selector for APAC languages. |
-| 3.5 | **Multilingual APAC language support** | High | Gemini natively supports Bengali (bn), Hindi (hi), Tamil (ta), Telugu (te), Indonesian (id), Thai (th), Vietnamese (vi), Filipino (fil), Chinese (zh), Japanese (ja), Korean (ko), and 60+ others. Implementation: (a) language selector in student profile, (b) store as `{preferred_language}` in session state, (c) root agent prompt: "Respond in {preferred_language}". No external translation API needed — Gemini handles detection and generation natively. Zero code effort, very high APAC judge impact. |
-| 3.6 | **Inline image rendering** | High | `BuiltInCodeExecutor` returns matplotlib as `inline_data` Parts (base64 PNG in event `content.parts`). Frontend extracts image parts, renders as inline `<img src="data:image/png;base64,..."/>` (React) or `st.image()` (Streamlit). Must render within chat flow alongside formatted text, not as separate artifacts. |
-| 3.7 | **Session progress display** | Medium | Show topics covered, quiz scores, and subjects explored within current session. Aggregated from session state. Visual summary at end of session or on demand. |
-| 3.8 | **Mobile responsiveness** | Medium | APAC students primarily access via smartphones. AG-UI/React: fully custom responsive CSS, mobile-first layout. Streamlit: responsive by default but not mobile-first. Test in Chrome DevTools mobile viewport for demo video. Mention PWA as production roadmap item in submission. |
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 3.1 | **ADK backend API** | ✅ Done | `main.py` at repo root. `get_fast_api_app()` with `session_service_uri` + `auto_create_session=True`. Dev: SQLite. Prod (Phase 4): swap to `postgresql+asyncpg://...` pointing at AlloyDB. |
+| 3.2 | **Student web UI** | ✅ Done | `streamlit_app.py` at repo root. Streaming chat via `/run_sse`, sidebar profile form, subject shortcuts (tutoring + quiz), session info panel, New Session button. |
+| 3.3 | **Quiz mode UI** | ✅ Done | Quiz mode works through chat — quiz shortcuts in sidebar trigger quiz_pipeline. MCQ options, evaluation, hints all rendered as chat messages. No separate UI needed. |
+| 3.4 | **Student profile & onboarding** | ✅ Done | Profile form in sidebar: name, grade (1–12 + undergraduate), preferred language. Stored in ADK session state with `user:` prefix on session creation. Root agent prompt injects `{user:name}`, `{user:grade_level}`, `{user:preferred_language}`. Phase 3.4 upgrade: swap SQLite → AlloyDB for cross-device persistence. |
+| 3.5 | **Multilingual APAC language support** | ✅ Done | Language selector in sidebar (12 APAC languages + English). Stored as `user:preferred_language`. Root agent prompt instructs Gemini to respond in that language. Zero translation API cost. |
+| 3.6 | **Inline image rendering** | ✅ Done | Streamlit `st.write_stream()` renders markdown including base64 images from BuiltInCodeExecutor output. |
+| 3.7 | **Session continuity across refreshes** | ✅ Done | `user_id` and `session_id` persisted in `st.query_params` (URL). Page refresh restores same ADK session. "New Session" button in sidebar starts fresh. |
+| 3.8 | **Mobile responsiveness** | ⚠️ Partial | Streamlit is responsive by default. Not mobile-first. Sufficient for demo. PWA noted as post-hackathon roadmap item. |
 
-### Phase 4: Cloud Deployment & Polish (Technical Merit)
+### Phase 4: Cloud Deployment & Polish (Technical Merit) — ✅ COMPLETE
 > **Goal:** Deploy on Google Cloud to provide judges a live URL.
-> **Demonstrates:** Production readiness, Vertex AI integration, Cloud Run scalability.
+> **Demonstrates:** Production readiness, Cloud Run scalability, MCP + AlloyDB integration end-to-end.
 >
-> **Deployment architecture:** Three Cloud Run services + AlloyDB.
-> Service 1: Frontend (React/Next.js or Streamlit). Service 2: ADK backend (`get_fast_api_app()`).
-> Service 3: MCP Toolbox for Databases. All connect to AlloyDB (asia-southeast1).
+> **Deployed architecture:** Three Cloud Run services in `asia-southeast1` + AlloyDB.
+> - Service 1: tutor-frontend (Streamlit) — `tutor-frontend-319376906222.asia-southeast1.run.app`
+> - Service 2: tutor-backend (ADK FastAPI) — `tutor-backend-319376906222.asia-southeast1.run.app`
+> - Service 3: tutor-toolbox (MCP Toolbox) — `tutor-toolbox-cg7k42k3uq-as.a.run.app`
+> - AlloyDB: `tutor-cluster` / `tutor-instance`, `asia-southeast1`, public IP `34.124.206.1`
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 4.1 | **Switch to Vertex AI** | ⚠️ Reverted | Vertex AI `us-central1` default quota (~5 RPM) too low for multi-agent quiz flows (4–6 LLM calls/turn). Reverted to API key (`GOOGLE_GENAI_USE_VERTEXAI=0`) for reliable demo. Switch back to Vertex AI only after requesting quota increase (60+ RPM). See §16. |
+| 4.2 | **Cloud Run deployment — ADK backend** | ✅ Done | `Dockerfile.backend` + `uvicorn`. `SESSION_DB_URI` from Secret Manager pointing to AlloyDB. `MCP_TOOLBOX_URL` env var pointing to tutor-toolbox service URL. |
+| 4.3 | **Cloud Run deployment — Frontend** | ✅ Done | `Dockerfile.frontend` + Streamlit. `BACKEND_URL` env var. Images persist across chat history via `st.session_state.messages["images"]`. |
+| 4.4 | **Cloud Run deployment — MCP Toolbox** | ✅ Done | `Dockerfile.toolbox` (Alpine + gcompat for glibc). IAM: `allUsers` invoker on tutor-toolbox (required — backend calls toolbox without identity token). |
+| 4.5 | **Observability** | ⏳ Deferred | Cloud Logging works (errors visible via `gcloud logging read`). Cloud Trace not configured. |
+
+---
+
+## 16. Cloud Run Deployment — Lessons Learned
+
+> Documented from actual deployment debugging (2026-03-25). Read before re-deploying.
+
+### 16.1 Service URLs (live)
+
+| Service | URL | Auth |
+|---------|-----|------|
+| tutor-frontend | `https://tutor-frontend-319376906222.asia-southeast1.run.app` | Public (allUsers) |
+| tutor-backend | `https://tutor-backend-319376906222.asia-southeast1.run.app` | Public (allUsers) |
+| tutor-toolbox | `https://tutor-toolbox-cg7k42k3uq-as.a.run.app` | Public (allUsers) |
+
+### 16.2 Environment Variables (tutor-backend)
+
+| Variable | Value | Source |
+|----------|-------|--------|
+| `GOOGLE_GENAI_USE_VERTEXAI` | `0` (dev) / `1` (prod with quota) | env var |
+| `GOOGLE_API_KEY` | Gemini API key | env var (dev only) |
+| `GOOGLE_CLOUD_PROJECT` | `genai-apac-demo-project` | env var |
+| `GOOGLE_CLOUD_LOCATION` | `us-central1` | env var — **must be `us-central1`**, not `asia-southeast1` (Gemini endpoint DNS fails in asia-southeast1 even when services are deployed there) |
+| `MCP_TOOLBOX_URL` | `https://tutor-toolbox-cg7k42k3uq-as.a.run.app/mcp` | env var |
+| `SESSION_DB_URI` | `postgresql+asyncpg://postgres:...@34.124.206.1/postgres` | Secret Manager: `session-db-uri` |
+
+### 16.3 Known Gotchas
+
+**Env vars with newlines (PowerShell):** Never set env vars by copy-pasting multi-line text in PowerShell — trailing `\n` corrupts the value. Always use `gcloud run services update --update-env-vars="KEY=VALUE"` directly, or `Set-Content -NoNewline` for secrets. Symptom: `httpx.InvalidURL: Invalid non-printable ASCII character in URL, '\n' at position N`.
+
+**MCP Toolbox IAM:** The `tutor-toolbox` Cloud Run service must have `allUsers` with `roles/run.invoker`. The ADK `MCPToolset` uses a plain `httpx` client with no auth header — it cannot call authenticated Cloud Run services. Symptom: `403 Forbidden` on `/mcp`.
+
+**Alpine + Go binary:** `Dockerfile.toolbox` uses Alpine. The `genai-toolbox` binary is glibc-linked. Requires `apk add gcompat` to provide glibc shim. Without it: `sh: toolbox: not found` (exit 127).
+
+**`PORT` is reserved on Cloud Run:** Never set `--set-env-vars="PORT=..."` when deploying — Cloud Run injects `$PORT` automatically. Symptom: `Error: PORT is a reserved name`.
+
+**AlloyDB `@` in password:** If the AlloyDB password contains `@`, URL-encode it as `%40` in the connection URI. Symptom: `[Errno -2] Name or service not known` (URI parser treats text after `@` as hostname).
+
+**AlloyDB authorized networks:** Cloud Run egress IPs must be allowed. For dev, set `--authorized-external-networks=0.0.0.0/0` on the AlloyDB instance. For production, use Private Service Connect instead.
+
+**`GOOGLE_CLOUD_LOCATION=asia-southeast1` DNS failure:** Gemini API endpoint resolution fails when location is `asia-southeast1`, even though Cloud Run services are deployed there. Always use `us-central1` as the Gemini location. This does NOT affect where Cloud Run services run — only where Gemini API calls are routed.
+
+### 16.4 Vertex AI Rate Limits
+
+Gemini 2.5 Flash on Vertex AI has a very low default quota (~5 RPM in `us-central1`). Multi-agent quiz flows make 4–6 LLM calls per student turn (root_agent routing + quiz_agent tool calls + quiz_agent response generation). This exhausts the quota immediately.
+
+**Current state:** `GOOGLE_GENAI_USE_VERTEXAI=0` (API key). Google AI Studio API key has 15 RPM / 1,500 RPD free tier — sufficient for demo testing.
+
+**To switch to Vertex AI for production:**
+1. Request quota increase: Cloud Console → IAM & Admin → Quotas → `aiplatform.googleapis.com` → `generate_content_requests` → request 60+ RPM
+2. Then: `gcloud run services update tutor-backend --region=asia-southeast1 --update-env-vars="GOOGLE_GENAI_USE_VERTEXAI=1" --remove-env-vars="GOOGLE_API_KEY"`
+
+### 16.5 Streamlit SSE Streaming Architecture
+
+With `streaming: False` on the ADK `/run_sse` endpoint:
+- ADK sends one final text event per agent (not incremental chunks)
+- Events have an `author` field identifying which agent produced them
+- `turnComplete: true` marks the end of the turn
+
+**Response display strategy:** Prefer the last pipeline agent's text (response_formatter or quiz_agent) over root_tutor_agent relay. The root_tutor_agent is instructed to relay verbatim but sometimes summarizes quiz evaluations. The pipeline output is always authoritative.
+
+```
+fallback_text = text from last non-root agent (quiz_agent / response_formatter)
+root_text     = text from root_tutor_agent (relay — may be truncated)
+→ On turnComplete: yield fallback_text if present, else root_text
+→ root_text only used when root_agent responds directly (out-of-scope queries)
+```
+
+### 16.6 Saving Costs During Development
+
+| Resource | Idle cost | Action |
+|----------|-----------|--------|
+| Cloud Run (min-instances=0) | $0 | Leave running |
+| AlloyDB instance | ~$0.18–0.20/vCPU-hr | **Stop via Cloud Console** when not testing |
+| Artifact Registry | ~$0.001/hr | Leave as-is |
+
+To stop AlloyDB: Cloud Console → AlloyDB → tutor-cluster → tutor-instance → Stop.
+To start: same path → Start (takes ~3-4 min to become READY before quiz works).
+
+### Future Enhancements
+> These items are valuable for evolving the platform beyond the current state.
 
 | # | Item | Priority | Notes |
 |---|------|----------|-------|
-| 4.1 | **Switch to Vertex AI** | High | Set `GOOGLE_GENAI_USE_VERTEXAI=1`. Configure project, region. Zero agent code changes — only env vars. Shows production-grade auth and compliance awareness. Service account identity replaces API key. |
-| 4.2 | **Cloud Run deployment — ADK backend** | High | Custom Dockerfile with `get_fast_api_app()` + `uvicorn`. `--timeout 300` (agentic chains take 30-60s), `--concurrency 1` (session safety), min instances 1. `DatabaseSessionService` URI points to AlloyDB. Env vars: `GOOGLE_GENAI_USE_VERTEXAI=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`. |
-| 4.3 | **Cloud Run deployment — Frontend** | High | If React: build static assets, serve via nginx or Node.js Cloud Run service. If Streamlit: `streamlit run app.py --server.port=${PORT:-8501}`. Configure CORS between frontend and backend services. |
-| 4.4 | **Cloud Run deployment — MCP Toolbox** | High | Deploy MCP Toolbox for Databases as separate Cloud Run service. Toolbox connects to AlloyDB via AlloyDB connector (IAM auth, no passwords in prod). ADK backend connects to Toolbox via service URL. |
-| 4.5 | **Observability** | Low | Integrate Cloud Logging and Cloud Trace. Track token consumption per agent per turn. Nice-to-have for demo, shows production thinking. |
-
-### Phase 5: Demo & Submission Preparation
-> **Goal:** Create compelling submission materials.
-
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 5.1 | **APAC impact narrative** | Critical | Write project description framing the platform as solving STEM education access inequality across APAC — 250M+ students in the region lack access to quality tutors. Cite specific stats for India, Indonesia, Philippines, Bangladesh. Emphasize: JEE/NEET dataset provenance, Bengali/Hindi/Tamil language support, mobile-first design for smartphone-primary student populations. |
-| 5.2 | **3-minute demo video** | Critical | Structure: Problem (30s) → Solution vision (30s) → Live demo: multi-subject tutoring + quiz mode with adaptive difficulty + multilingual (90s) → Architecture & Google Cloud stack: ADK + AG-UI + MCP Toolbox + AlloyDB + pgvector + Vertex AI (30s) → Impact & roadmap: A2UI, Flutter GenUI, PWA (30s). Upload to YouTube, public. |
-| 5.3 | **Judge access instructions** | Critical | Provide: live Cloud Run URL, sample student profile, sample queries per subject (math, physics, science), quiz mode walkthrough ("quiz me on algebra"), multilingual demo ("Bengali mein samjhao"). |
-| 5.4 | **Architecture diagram** | High | Visual showing full stack: Student Browser → AG-UI (CopilotKit) → ADK Backend (FastAPI + Gemini 2.5 Flash) → Root Agent → Subject Pipelines (SequentialAgent) → MCP Toolbox → AlloyDB (pgvector + ScaNN + AlloyDB AI). Highlight all Google Cloud components. Show protocol layers: AG-UI, MCP, ADK orchestration. |
-| 5.5 | **README overhaul** | High | Rewrite README.md as the public-facing project showcase: problem statement, APAC relevance, architecture diagram, tech stack table, protocol stack (AG-UI + MCP + ADK), setup instructions, screenshots/GIFs of each feature. |
-
-### Deferred (Post-Hackathon)
-> These items are valuable but not required for a winning demo submission.
-
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| D.1 | **Cross-session student progress persistence** | Post-hackathon | Design persistent student progress tracking in AlloyDB (topics, scores, weak areas). Requires auth system and student identity. Not needed for demo — session state is sufficient. |
-| D.2 | **Token efficiency & thinking_budget** | Post-hackathon | `include_contents='none'` is already set on the formatter (done in Phase 1). Remaining: disable thinking on formatter (`thinking_budget=0`), tune per-agent budgets based on measured cost vs. quality. |
-| D.3 | **Token measurement baseline** | Post-hackathon | Measure tokens per agent per turn across short, medium, and long sessions. Reintroduce `before_model_callback` history trimming on subject tutors if needed after measurement. |
-| D.4 | **Test suite** | Post-hackathon | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
-| D.5 | **Enterprise web search** | Post-hackathon | Replace `google_search` with `enterprise_web_search` on Vertex AI for FERPA/COPPA compliance in production. |
-| D.6 | **A2UI + Flutter GenUI SDK** | Post-hackathon | Migrate frontend to Flutter using Google's A2UI protocol (v0.8) and GenUI SDK (alpha). Agents generate declarative UI components rendered natively on mobile/web. Google's recommended production direction for agent UIs. |
-| D.7 | **PWA for offline access** | Post-hackathon | Convert frontend to Progressive Web App for offline-capable mobile access in low-connectivity APAC regions. Service worker caches UI shell + previously loaded content. "Add to Home Screen" for app-like experience. |
+| D.1 | **Cross-session student progress persistence** | High | Design persistent student progress tracking in AlloyDB (topics, scores, weak areas). Requires auth system and student identity. Session state is sufficient for current use. |
+| D.2 | **Token efficiency & thinking_budget** | Medium | `include_contents='none'` is already set on the formatter. Remaining: disable thinking on formatter (`thinking_budget=0`), tune per-agent budgets based on measured cost vs. quality. |
+| D.3 | **Token measurement baseline** | Medium | Measure tokens per agent per turn across short, medium, and long sessions. Reintroduce `before_model_callback` history trimming on subject tutors if needed after measurement. |
+| D.4 | **Test suite** | Medium | Add pytest-based agent unit tests using ADK's `Runner` + `InMemorySessionService`. Add `adk eval` eval datasets. |
+| D.5 | **Enterprise web search** | Medium | Replace `google_search` with `enterprise_web_search` on Vertex AI for FERPA/COPPA compliance in production. |
+| D.6 | **A2UI + Flutter GenUI SDK** | Low | Migrate frontend to Flutter using Google's A2UI protocol (v0.8) and GenUI SDK (alpha). Agents generate declarative UI components rendered natively on mobile/web. |
+| D.7 | **PWA for offline access** | Low | Convert frontend to Progressive Web App for offline-capable mobile access in low-connectivity regions. Service worker caches UI shell + previously loaded content. |
 
 ### Phase Summary — Execution Order
 
 ```
 Phase 1 (Core Expansion)        ←── ✅ COMPLETE
     ↓
-Phase 2 (MCP + Database)        ←── Primary track (Track 2 + 3), highest differentiation
-    │                                 AlloyDB study first → then incremental dataset ingestion
-    │                                 ↕ (can overlap)
-Phase 3 (Student UI)             ←── Start in parallel with Phase 2
-    │                                 AG-UI + CopilotKit (primary) or Streamlit (fallback)
-    │                                 Backend: get_fast_api_app() + DatabaseSessionService
-    ↓
-Phase 4 (Cloud Deployment)       ←── After core features work locally
-    │                                 3 Cloud Run services + AlloyDB
-    ↓
-Phase 5 (Demo & Submission)      ←── Final, after everything works
+Phase 2 (MCP + Database)        ←── ✅ COMPLETE
+    │
+Phase 3 (Student UI)             ←── ✅ COMPLETE
+    │
+Phase 4 (Cloud Deployment)       ←── ✅ COMPLETE
+    │
+Future Enhancements              ←── See table above
 ```
 
 ### Full Stack Architecture (Target)
@@ -842,10 +910,10 @@ ADK Backend ─── Cloud Run Service 2 (FastAPI + get_fast_api_app)
     │  DatabaseSessionService → AlloyDB (sessions)
     │
     ├──► root_tutor_agent (orchestrator)
-    │    ├── math_pipeline      [google_search + code_executor → formatter]
-    │    ├── physics_pipeline   [google_search + code_executor → formatter]
+    │    ├── math_pipeline      [code_executor → formatter]
+    │    ├── physics_pipeline   [code_executor → formatter]
     │    ├── science_pipeline   [google_search → formatter]
-    │    └── quiz_pipeline      [MCPToolset → formatter]
+    │    └── quiz_pipeline      [MCPToolset (no formatter)]
     │                               │
     │                               ▼  MCP (HTTP)
     │                          MCP Toolbox ─── Cloud Run Service 3

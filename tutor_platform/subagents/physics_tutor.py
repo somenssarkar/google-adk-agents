@@ -1,17 +1,19 @@
 from google.adk.agents.llm_agent import Agent
 
-from ..tools import google_search, code_executor
+from ..tools import code_executor
 from ..prompts.physics_tutor_prompt import PHYSICS_TUTOR_INSTRUCTION
 
 # Self-contained physics tutor subagent.
 #
 # Tools:
-#   - google_search:   verifies physical constants, laws, and named theorems in real time
 #   - code_executor:   runs numerical physics calculations in Gemini's sandbox
 #
-# Same tool pattern as math_tutor_agent: google_search (native built-in, bypass_multi_tools_limit=True)
-# + code_executor (native built-in). No function-calling tools — avoids the 400 conflict
-# with code_execution on the Gemini API.
+# NOTE: google_search is intentionally excluded. Vertex AI rejects combining
+# code_execution (built-in) with google_search when both are active in the same
+# agent. Between the two, code_executor is more valuable for physics — verified
+# unit-consistent numerical computation is the priority. Gemini 2.5 Flash covers
+# physical constants, laws, and named theorems from training data sufficiently
+# well for tutoring purposes.
 #
 # Writes the verified solution to session state under 'subject_solution'.
 # The Response Formatter reads this via {subject_solution} template injection.
@@ -31,7 +33,6 @@ physics_tutor_agent = Agent(
         "Call this agent for any physics question."
     ),
     instruction=PHYSICS_TUTOR_INSTRUCTION,
-    tools=[google_search],
     code_executor=code_executor,
     output_key='subject_solution',
 )
