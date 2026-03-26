@@ -67,12 +67,16 @@ def _init_session() -> None:
     # Persist user_id across browser sessions; generate once per new browser
     if "uid" not in st.session_state:
         st.session_state.uid = params.get("uid") or str(uuid.uuid4())
-    st.query_params["uid"] = st.session_state.uid
+    # Only write query_params when the value differs — writing on every rerun
+    # causes a URL mutation that triggers a visible re-render flicker.
+    if st.query_params.get("uid") != st.session_state.uid:
+        st.query_params["uid"] = st.session_state.uid
 
     # Persist session_id across page refreshes; new session = new conversation
     if "sid" not in st.session_state:
         st.session_state.sid = params.get("sid") or str(uuid.uuid4())
-    st.query_params["sid"] = st.session_state.sid
+    if st.query_params.get("sid") != st.session_state.sid:
+        st.query_params["sid"] = st.session_state.sid
 
     # Chat history for this session
     if "messages" not in st.session_state:
@@ -144,6 +148,17 @@ def _stream_agent_response(message: str, state_delta: dict | None = None):
         with httpx.Client(timeout=180.0) as client:
             with client.stream("POST", f"{BACKEND_URL}/run_sse", json=payload) as resp:
                 resp.raise_for_status()
+
+                # We prefer root_tutor_agent text (it relays the final pipeline
+                # response). But for quiz evaluation turns the root agent sometimes
+                # stays silent and the quiz_agent itself is the last text emitter.
+                # Strategy: buffer all text events keyed by author; at turn-complete
+                # yield root_tutor_agent if present, otherwise yield the last
+                # non-root agent text (quiz_agent evaluation, etc.).
+                root_text: list[str] = []
+                fallback_text: list[str] = []  # last non-root agent's text
+                _fallback_author: str = ""
+
                 for raw_line in resp.iter_lines():
                     if not raw_line.startswith("data: "):
                         continue
@@ -155,15 +170,29 @@ def _stream_agent_response(message: str, state_delta: dict | None = None):
                     except json.JSONDecodeError:
                         continue
 
-                    # Skip turn-complete events — content already streamed via partials
+                    # On turn-complete flush:
+                    # Prefer pipeline output (fallback) over root relay — the root
+                    # agent is instructed to relay verbatim but the LLM sometimes
+                    # summarizes. The last pipeline agent (response_formatter or
+                    # quiz_agent) always has the complete, authoritative text.
+                    # Only use root text when no pipeline ran (e.g. out-of-scope
+                    # replies where root_tutor_agent responds directly).
                     if event.get("turnComplete"):
+                        if fallback_text:
+                            for chunk in fallback_text:
+                                yield chunk
+                        elif root_text:
+                            for chunk in root_text:
+                                yield chunk
+                        root_text.clear()
+                        fallback_text.clear()
+                        _fallback_author = ""
                         continue
 
-                    is_root = event.get("author") == "root_tutor_agent"
+                    author = event.get("author", "")
+                    is_root = author == "root_tutor_agent"
 
                     # Artifact delta — code executor saves images to ADK artifact service.
-                    # SSE sends a content-less event with actions.artifactDelta carrying
-                    # {filename: version} for each new artifact. Fetch and yield inline.
                     artifact_delta = event.get("actions", {}).get("artifactDelta", {})
                     for filename in artifact_delta:
                         art_url = (
@@ -185,18 +214,39 @@ def _stream_agent_response(message: str, state_delta: dict | None = None):
                         except Exception:
                             pass
 
-                    # ADK sends two root agent events per turn:
-                    #   1. partial=True  — incremental streaming chunks  → yield
                     content = event.get("content")
                     if not content:
                         continue
 
                     for part in content.get("parts", []):
-                        # Text: root agent only (avoid surfacing intermediate agent text)
+                        text = part.get("text")
+                        if not text:
+                            continue
                         if is_root:
-                            text = part.get("text")
-                            if text:
-                                yield text
+                            root_text.append(text)
+                        else:
+                            # Track only the LAST non-root agent's text so we
+                            # don't mix intermediate solver output with quiz output.
+                            if author != _fallback_author:
+                                fallback_text.clear()
+                                _fallback_author = author
+                            fallback_text.append(text)
+
+                # End of stream without turnComplete — flush whatever we have
+                if fallback_text:
+                    for chunk in fallback_text:
+                        yield chunk
+                elif root_text:
+                    for chunk in root_text:
+                        yield chunk
+                else:
+                    # Stream ended with no text at all — backend likely cold-starting.
+                    # Yield an explicit message so the student sees a bubble instead
+                    # of a blank response and knows to retry.
+                    yield (
+                        "⚠️ The tutor is still warming up. "
+                        "Please send your message again in a moment."
+                    )
 
     except httpx.ConnectError:
         yield (
@@ -254,6 +304,20 @@ def _list_session_artifacts() -> list[str]:
     except Exception:
         pass
     return []
+
+
+# ---------------------------------------------------------------------------
+# Backend health check — cached to avoid a blocking network call on every rerun
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def _backend_status(url: str) -> str:
+    """Return a status caption string. Cached for 30 s so it doesn't stall reruns."""
+    try:
+        r = httpx.get(f"{url}/health", timeout=2.0)
+        return "🟢 Backend connected" if r.status_code == 200 else "🔴 Backend error"
+    except Exception:
+        return "🔴 Backend offline"
 
 
 # ---------------------------------------------------------------------------
@@ -337,15 +401,10 @@ def _render_sidebar() -> None:
             st.query_params["sid"] = st.session_state.sid
             st.rerun()
 
-        # Backend status check
-        try:
-            r = httpx.get(f"{BACKEND_URL}/health", timeout=2.0)
-            if r.status_code == 200:
-                st.caption("🟢 Backend connected")
-            else:
-                st.caption("🔴 Backend error")
-        except Exception:
-            st.caption("🔴 Backend offline")
+        # Backend status check — cached so it doesn't block on every rerun.
+        # BACKEND_URL is intentionally not rendered — it's an internal service
+        # URL that should not be exposed in the page source.
+        st.caption(_backend_status(BACKEND_URL))
 
 
 # ---------------------------------------------------------------------------

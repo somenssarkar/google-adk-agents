@@ -6,17 +6,13 @@ from ..prompts.math_tutor_prompt import MATH_TUTOR_INSTRUCTION
 # Self-contained math tutor subagent.
 #
 # Tools:
-#   - google_search:   looks up theorems, formulas, definitions in real time
 #   - code_executor:   verifies every numerical result in Gemini's sandbox
 #
-# NOTE: url_context is intentionally excluded. The Gemini API does not allow
-# combining code_execution (built-in) with function-calling tools in the same
-# request. When google_search is the only item in tools[], ADK keeps it as a
-# native built-in (no wrapping), which is compatible with code_execution.
-# Adding a second tool causes ADK to wrap google_search in a GoogleSearchAgentTool
-# (function call), which then conflicts with code_execution.
-# url_context is available in tutor_platform/tools/__init__.py for subject agents
-# that do not use code_executor (e.g., Geography, English).
+# NOTE: google_search is intentionally excluded. Vertex AI rejects combining
+# code_execution (built-in) with google_search when both are active in the same
+# agent. Between the two, code_executor is more valuable for math — verified
+# computation is the priority. Gemini 2.5 Flash covers theorem/formula knowledge
+# from training data sufficiently well for tutoring purposes.
 #
 # Writes the verified solution to session state under 'subject_solution'.
 # The Response Formatter reads this via {subject_solution} template injection.
