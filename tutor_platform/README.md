@@ -4,7 +4,11 @@ An AI-powered school tutoring platform built with Google ADK and Gemini 2.5 Flas
 A root orchestrator routes student questions to specialized subject-tutor agents and
 quiz pipelines, returning clean textbook-style responses.
 
+**Live demo:** https://tutor-frontend-319376906222.asia-southeast1.run.app
+
 ## Usage
+
+### ADK web UI (local dev — tutoring only)
 
 ```powershell
 # From the repository root
@@ -58,7 +62,7 @@ root_tutor_agent  (LlmAgent — orchestrator)
       │
       └── AgentTool(quiz_pipeline)      ←── "quiz me on algebra difficulty 3"
               quiz_agent                    MCPToolset only → MCP Toolbox → AlloyDB
-              response_formatter_quiz       include_contents='none'
+                                            (no formatter — quiz output is student-ready)
 ```
 
 Each pipeline is a `SequentialAgent`: tutor/quiz agent runs first and writes its output to
