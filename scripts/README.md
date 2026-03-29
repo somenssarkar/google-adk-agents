@@ -252,34 +252,29 @@ python ingest_entrance_exam.py --subject physics --limit 500
 
 ---
 
-### Upcoming Datasets (not yet ingested)
+### Dataset 3 — Physics + Biology + Chemistry (MMLU-Pro) ✅ Ingested
 
-| Phase | Dataset | Subject | Script | Status |
-|-------|---------|---------|--------|--------|
-| 2.3c | `Zhengsh123/PHYSICS` | Physics | ~~`ingest_physics.py`~~ | ⚠️ Private — use MMLU-Pro |
-| 2.3c | `TIGER-Lab/MMLU-Pro` physics (~1.3K, MIT) | Physics | `ingest_mmlu_pro.py` | Ready |
-| 2.3d | `TIGER-Lab/MMLU-Pro` bio (717, MIT) | Biology | `ingest_mmlu_pro.py` | Ready |
-| 2.3d | `TIGER-Lab/MMLU-Pro` chem (1.1K, MIT) | Chemistry | `ingest_mmlu_pro.py` | Ready |
-| 2.3e | AI-generated (Gemini + validation) | Env. Science | `generate_env_science.py` | Ready |
-
-### Dataset 3 — Physics + Biology + Chemistry (MMLU-Pro)
+> **Status:** Already ingested — Physics: 1,304, Biology: 722, Chemistry: 1,137 problems.
+> Re-running is safe (`ON CONFLICT DO NOTHING`).
+> `Zhengsh123/PHYSICS` was private/inaccessible — replaced by MMLU-Pro physics subset.
 
 ```bash
 python ingest_mmlu_pro.py --explore
 python ingest_mmlu_pro.py --dry-run --limit 20
-python ingest_mmlu_pro.py --subjects biology   # Biology only first
-python ingest_mmlu_pro.py                      # Both biology + chemistry
+python ingest_mmlu_pro.py --subjects physics   # Physics only
+python ingest_mmlu_pro.py --subjects biology   # Biology only
+python ingest_mmlu_pro.py                      # All three subjects
 ```
 
 **Verify:**
 ```sql
-SELECT subject, count(*) FROM problems WHERE subject IN ('biology','chemistry') GROUP BY subject;
+SELECT subject, count(*) FROM problems WHERE subject IN ('physics','biology','chemistry') GROUP BY subject;
 ```
 
-### Dataset 5 — Environmental Science (AI-generated)
+### Dataset 4 — Environmental Science (AI-generated) ✅ Ingested
 
-This script uses Gemini to generate MCQ questions across 15 topics × 3 difficulty levels.
-A second Gemini call validates each question before ingestion.
+> **Status:** Already ingested — 570 MCQ questions across 15 topics × 3 difficulty levels.
+> Generated and validated via Gemini 2.5 Flash. Re-running is safe.
 
 ```bash
 # Set API key (local dev) or use Vertex AI (Cloud Shell)
@@ -300,6 +295,17 @@ python generate_env_science.py --skip-validation
 ```sql
 SELECT count(*), difficulty FROM problems WHERE subject='environmental_science' GROUP BY difficulty;
 ```
+
+### Full database summary
+
+| Subject | Count | Source |
+|---------|-------|--------|
+| Math | 8,792 | `openai/gsm8k` (MIT) |
+| Physics | 1,304 | `TIGER-Lab/MMLU-Pro` (MIT) |
+| Chemistry | 1,137 | `TIGER-Lab/MMLU-Pro` (MIT) |
+| Biology | 722 | `TIGER-Lab/MMLU-Pro` (MIT) |
+| Environmental Science | 570 | AI-generated (Gemini 2.5 Flash) |
+| **Total** | **12,525** | |
 
 ---
 
@@ -412,13 +418,21 @@ The version is pinned in both start scripts (`TOOLBOX_VERSION`). To upgrade:
 
 ---
 
-## Next Step: Quiz Agent (Phase 2.5)
+## Phase 2 Status — Complete
 
-With the MCP Toolbox server running, the next phase is **Phase 2.5 — Quiz Agent**:
+All Phase 2 components are implemented and deployed:
 
-- `tutor_platform/subagents/quiz_agent.py` — new `LlmAgent` with `MCPToolset`
-- `tutor_platform/prompts/quiz_agent_prompt.py` — quiz delivery + answer evaluation logic
-- Wire `quiz_pipeline` (SequentialAgent) into `tutor_platform/agent.py`
-- Update `root_agent_prompt.py` with quiz routing rules (Phase 2.6)
+| Component | Status |
+|-----------|--------|
+| AlloyDB cluster + instance (`tutor-cluster`, `asia-southeast1`) | ✅ Running |
+| Database schema (`problems` table, ScaNN index, AlloyDB AI) | ✅ Done |
+| Dataset ingestion (12,525 questions across 5 subjects) | ✅ Done |
+| MCP Toolbox for Databases (`mcp_toolbox/tools.yaml`) | ✅ Done |
+| Quiz agent (`tutor_platform/subagents/quiz_agent.py`) | ✅ Done |
+| Quiz pipeline wired into root orchestrator | ✅ Done |
+| Deployed as `tutor-toolbox` Cloud Run service | ✅ Live |
 
-See CLAUDE.md §8.1 and §13 (Phase 2.5–2.6) for the implementation plan.
+The quiz agent connects to `http://127.0.0.1:5000/mcp` in local dev and to the
+`tutor-toolbox` Cloud Run service URL in production (set via `MCP_TOOLBOX_URL` env var).
+
+See [`CLAUDE.md §13`](../CLAUDE.md) for full Phase 2 implementation details.
